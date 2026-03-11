@@ -1,0 +1,58 @@
+name: Frontend CI
+
+on:
+  push:
+    branches: ["main", "develop"]
+    paths:
+      - "frontend/**"
+      - ".github/workflows/frontend-ci.yml"
+  pull_request:
+    branches: ["main", "develop"]
+    paths:
+      - "frontend/**"
+      - ".github/workflows/frontend-ci.yml"
+
+jobs:
+  build:
+    name: Vite Build (Node ${{ matrix.node-version }})
+    runs-on: ubuntu-latest
+
+    strategy:
+      fail-fast: false
+      matrix:
+        node-version: ["20", "22"]
+
+    steps:
+      # ── checkout ──────────────────────────────────────────────────────
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      # ── Node.js ───────────────────────────────────────────────────────
+      - name: Set up Node.js ${{ matrix.node-version }}
+        uses: actions/setup-node@v4
+        with:
+          node-version: ${{ matrix.node-version }}
+          cache: npm
+          cache-dependency-path: frontend/package-lock.json
+
+      # ── dependencies ──────────────────────────────────────────────────
+      - name: Install npm dependencies
+        working-directory: frontend
+        run: npm ci
+
+      # ── build ─────────────────────────────────────────────────────────
+      - name: Build production bundle
+        working-directory: frontend
+        run: npm run build
+        env:
+          # Point API to a placeholder so Vite doesn't error on missing proxy
+          VITE_API_URL: http://localhost:8000
+          VITE_WS_URL:  ws://localhost:8000
+
+      # ── upload dist artifact ──────────────────────────────────────────
+      - name: Upload build artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: frontend-dist-node${{ matrix.node-version }}
+          path: frontend/dist/
+          retention-days: 7

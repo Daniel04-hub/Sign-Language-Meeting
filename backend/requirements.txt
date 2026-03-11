@@ -1,0 +1,23 @@
+# Django core
+Django==4.2.13
+
+# ASGI server (replaces Gunicorn for async support)
+daphne==4.0.0
+
+# Django Channels (WebSockets)
+channels==4.0.0
+
+# Redis channel layer for production
+channels-redis==4.1.0
+
+# Django REST Framework
+djangorestframework==3.14.0
+
+# CORS headers (allow React dev server)
+django-cors-headers==4.3.1
+
+# PostgreSQL adapter
+psycopg2-binary==2.9.9
+
+# Read .env files into Django settings
+python-decouple==3.8

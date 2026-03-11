@@ -1,0 +1,18 @@
+# Normalise line endings in the repository to LF.
+# Windows checkouts will still use CRLF (core.autocrlf=true),
+# but the stored blob is always LF — consistent across OSes.
+
+* text=auto eol=lf
+
+# Explicitly binary — never touch line endings.
+*.png  binary
+*.jpg  binary
+*.jpeg binary
+*.gif  binary
+*.ico  binary
+*.woff binary
+*.woff2 binary
+*.ttf  binary
+*.eot  binary
+# TF.js weight shards — always binary
+*.bin  binary
