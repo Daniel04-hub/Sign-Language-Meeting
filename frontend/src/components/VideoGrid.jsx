@@ -17,7 +17,6 @@ import VideoTile from './VideoTile';
 
 function VideoGrid({
   participants   = [],
-  localVideoRef,
   signDetections = {},
   isMicOn        = true,
   isCameraOn     = true,

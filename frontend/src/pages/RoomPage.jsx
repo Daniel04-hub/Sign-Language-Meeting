@@ -139,7 +139,7 @@ function RoomPage() {
       default:
         break;
     }
-  }, [routeWebRTCMessage]);
+  }, [routeWebRTCMessage, userId]);
 
   // ── WebSocket hook ────────────────────────────────────────────────────
   const { isConnected, sendMessage, reconnect } = useWebSocket(
@@ -299,7 +299,6 @@ function RoomPage() {
       <div style={{ flex: 1, overflow: 'hidden', padding: '12px 12px 0' }}>
         <VideoGrid
           participants={participants}
-          localVideoRef={localVideoRef}
           signDetections={signDetections}
           isMicOn={isMicOn}
           isCameraOn={isCameraOn}

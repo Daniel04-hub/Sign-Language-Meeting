@@ -52,7 +52,7 @@ export function useWebSocket(roomCode, userId, userName, onMessage) {
    * connect()
    * Opens a new WebSocket and wires up all event handlers.
    * -------------------------------------------------------------------- */
-  const connect = useCallback(() => {
+  const connect = useCallback(function connectSocket() {
     if (!roomCode || !userId || !userName) return;
 
     // Tear down any stale socket before creating a new one.
@@ -116,13 +116,13 @@ export function useWebSocket(roomCode, userId, userName, onMessage) {
         console.info(`[WS] Reconnecting in ${delay}ms (retry ${retriesRef.current + 1}/${MAX_RETRIES})`);
         retriesRef.current += 1;
         setTimeout(() => {
-          if (mountedRef.current) connect();
+          if (mountedRef.current) connectSocket();
         }, delay);
       } else {
         console.error('[WS] Max retries reached. Giving up.');
       }
     };
-  }, [roomCode, userId, userName]); // eslint-disable-line react-hooks/exhaustive-deps
+  }, [roomCode, userId, userName]);
 
   /** ------------------------------------------------------------------ *
    * Mount / unmount lifecycle
