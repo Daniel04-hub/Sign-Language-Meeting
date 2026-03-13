@@ -7,7 +7,6 @@ Prod: PostgreSQL + Redis Channel Layer  (values from environment)
 Requires a .env file at backend/.env (see .env.example).
 """
 
-import os
 from pathlib import Path
 
 from decouple import Csv, config
