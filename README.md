@@ -1,98 +1,70 @@
-# 🤟 SignMeet — Video Calls with Sign Language AI
+# Sign Language Meeting
 
-> Zoom clone for the Deaf community with real-time sign language detection
-> and live speech-to-text captions.
+Real-time video calls with Indian Sign Language AI detection.
+Built for the Deaf community.
 
-## What it does
-
-| Who | Action | What the other person gets |
-|-----|--------|---------------------------|
-| Deaf user | Signs at camera | Hearing user **hears** the word (TTS) |
-| Hearing user | Speaks | Deaf user **sees** live captions |
-
-- Real-time P2P video via WebRTC (up to 8 participants)
-- 5 sign classes: **HELLO, THANKS, BYE, YES, NO**
-- Sign detection runs **entirely in the browser** — no video data leaves the device
-- Room codes — share a link to invite anyone
+## What It Does
+- Deaf user signs → Hearing user hears it (Text-to-Speech)
+- Hearing user speaks → Deaf user sees captions (28px overlay)
+- Real-time P2P video via WebRTC (up to 8 users)
+- 5 ISL signs detected: HELLO, THANKS, BYE, YES, NO
 
 ## Tech Stack
 
-| Layer | Technology |
-|-------|-----------|
-| Backend | Django 4.2 + Django Channels 4 + Daphne |
-| Database | PostgreSQL 18 |
-| Realtime | WebSockets (Django Channels) |
-| Frontend | React 18 + Vite 8 + Bootstrap 5.3 |
-| AI | MediaPipe Hands + TensorFlow.js (in-browser) |
-| Deployment | Render.com (free tier) |
-
-## Project Structure
-
-```
-signmeet/
-├── backend/                 ← Django project
-│   ├── signmeet/            ← project settings, asgi, urls
-│   └── video_call/          ← Room model, REST API, WebSocket consumer
-├── frontend/                ← React + Vite app
-│   ├── src/
-│   │   ├── hooks/           ← useWebSocket, useWebRTC, useSignDetection
-│   │   ├── components/      ← VideoTile, VideoGrid, ControlsBar, …
-│   │   └── pages/           ← HomePage, RoomPage
-│   └── public/model/        ← TF.js model files (generated — see train_model/)
-├── train_model/             ← Python training script (MediaPipe → TF.js)
-└── docker-compose.yml       ← Local dev stack (postgres + daphne + vite)
-```
+| Layer     | Technology                                    |
+|-----------|-----------------------------------------------|
+| Backend   | Django 4.2 + Django Channels + PostgreSQL     |
+| Frontend  | React 18 + Vite + Bootstrap 5.3              |
+| AI/ML     | MediaPipe Hands + TensorFlow.js (in browser) |
+| Real-time | WebRTC P2P + Django Channels WebSockets       |
+| Deploy    | Render.com free tier + Docker                 |
 
 ## Quick Start
 
-### Prerequisites
+Backend:
+	cd backend
+	python -m venv venv
+	venv\Scripts\activate
+	pip install -r requirements.txt
+	cp ../.env.example .env
+	python manage.py migrate
+	python manage.py runserver
 
-- Python 3.11+
-- Node.js 20+
-- PostgreSQL 15+
+Frontend:
+	cd frontend
+	npm install
+	npm run dev
 
-### 1 — Clone
+Train AI Model (optional):
+	cd train_model
+	pip install -r requirements.txt
+	python train.py
 
-```bash
-git clone https://github.com/YOUR_USERNAME/signmeet.git
-cd signmeet
-```
+## Build Progress
 
-### 2 — Backend
+| Phase | Status      | Description                     |
+|-------|-------------|---------------------------------|
+| 1     | Complete    | Django + PostgreSQL + WebSockets|
+| 2     | In Progress | React + WebRTC Video            |
+| 3     | Pending     | Sign Language AI                |
+| 4     | Pending     | Speech Recognition + Captions   |
+| 5     | Pending     | UI Polish + Error Handling      |
+| 6     | Pending     | Docker + Render Deployment      |
 
-```bash
-cd backend
+## API Endpoints
 
-# Create and activate virtual environment
-python -m venv ../venv
-# Windows
-..\venv\Scripts\activate
-# macOS / Linux
-source ../venv/bin/activate
+| Method | Endpoint              | Description      |
+|--------|-----------------------|------------------|
+| GET    | /api/health/          | Health check     |
+| POST   | /api/rooms/create/    | Create new room  |
+| POST   | /api/rooms/join/      | Join a room      |
+| GET    | /api/rooms/{code}/    | Get room details |
 
-# Install dependencies
-pip install -r requirements.txt
-
-# Configure environment
-cp ../.env.example .env
-# Edit .env — set DB_PASSWORD and generate a SECRET_KEY
-
-# Create the database (PostgreSQL must be running)
-createdb signmeet_db          # or use pgAdmin
-
-# Run migrations
-python manage.py migrate
-
-# Start the development server
-daphne -p 8000 signmeet.asgi:application
-```
-
-Backend is available at http://localhost:8000
-
-### 3 — Frontend
-
-```bash
-cd frontend
+## CI/CD
+Every push to main runs:
+- Django tests and migration checks
+- React build verification
+- AI model dependency validation
 npm install
 npm run dev
 ```

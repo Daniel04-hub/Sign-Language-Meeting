@@ -1,0 +1,28 @@
+name: Phase 3 AI Model CI
+
+on:
+  push:
+    branches: [ main, develop ]
+    paths: [ 'train_model/**' ]
+  pull_request:
+    branches: [ main ]
+    paths: [ 'train_model/**' ]
+
+jobs:
+  validate:
+    name: Validate AI Dependencies
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - run: |
+          pip install scikit-learn numpy
+          python -c "
+          import sklearn
+          import numpy
+          print('scikit-learn version:', sklearn.__version__)
+          print('numpy version:', numpy.__version__)
+          print('AI dependencies OK')
+          "
