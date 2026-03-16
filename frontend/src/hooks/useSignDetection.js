@@ -16,8 +16,8 @@
  */
 
 import { useRef, useState, useCallback, useEffect } from 'react';
-import * as tf from '@tensorflow/tfjs';
 import { startMockDetection, stopMockDetection } from '../utils/mockSignDetection';
+import { measureLatency, logPerformance } from '../utils/performance';
 
 /* ── constants ──────────────────────────────────────────────────────────── */
 
@@ -60,6 +60,11 @@ export function useSignDetection(localVideoRef, sendMessage, userId, userName) {
   const animFrameRef   = useRef(null);   // requestAnimationFrame id
   const mockIntervalId = useRef(null);   // setInterval id for mock mode
   const lastSignRef    = useRef({ sign: null, timestamp: 0 });
+  const isProcessingRef = useRef(false);
+  const tfRef = useRef(null);
+  const memoryCheckIntervalRef = useRef(null);
+  const captureTimerRef = useRef(null);
+  const inputBufferRef = useRef(new Float32Array(63));
   const sendRef        = useRef(sendMessage);
   useEffect(() => { sendRef.current = sendMessage; }, [sendMessage]);
 
@@ -198,6 +203,18 @@ export function useSignDetection(localVideoRef, sendMessage, userId, userName) {
     return normalized;
   }, []);
 
+  const memoryCheck = useCallback(() => {
+    const tfLocal = tfRef.current;
+    if (!tfLocal) {
+      return;
+    }
+
+    const memory = tfLocal.memory();
+    if (memory.numTensors > 50) {
+      console.warn('TF.js memory warning:', memory);
+    }
+  }, []);
+
   /* ──────────────────────────────────────────────────────────────────────
    * predictSign
    *
@@ -208,16 +225,28 @@ export function useSignDetection(localVideoRef, sendMessage, userId, userName) {
    * @param {Float32Array} landmarks63
    * ──────────────────────────────────────────────────────────────────── */
   const predictSign = useCallback((landmarks63) => {
-    if (!modelRef.current) return;
+    const tfLocal = tfRef.current;
+    if (!modelRef.current || !tfLocal) return;
 
     try {
-      const result = tf.tidy(() => {
+      const result = tfLocal.tidy(() => {
         const scaledLandmarks = applyScaler(landmarks63);
-        const tensor      = tf.tensor2d([Array.from(scaledLandmarks)], [1, 63]);
-        const prediction  = modelRef.current.predict(tensor);
-        const probs       = prediction.dataSync();
-        const maxIndex    = probs.indexOf(Math.max(...probs));
-        const confidence  = probs[maxIndex];
+        inputBufferRef.current.set(scaledLandmarks);
+
+        const inputTensor = tfLocal.tensor2d(inputBufferRef.current, [1, 63]);
+        const prediction = modelRef.current.predict(inputTensor);
+        const predictionTensor = Array.isArray(prediction) ? prediction[0] : prediction;
+        const probs = Array.from(predictionTensor.dataSync());
+
+        if (Array.isArray(prediction)) {
+          prediction.forEach((tensor) => tensor.dispose());
+        } else {
+          predictionTensor.dispose();
+        }
+        inputTensor.dispose();
+
+        const maxIndex = probs.indexOf(Math.max(...probs));
+        const confidence = probs[maxIndex];
         const mappedSign = labelEncoderRef.current?.[maxIndex.toString()];
         return { sign: mappedSign || SIGN_LABELS[maxIndex], confidence };
       });
@@ -239,6 +268,9 @@ export function useSignDetection(localVideoRef, sendMessage, userId, userName) {
    * @param {object} results  — MediaPipe Hands results object
    * ──────────────────────────────────────────────────────────────────── */
   const processHandResults = useCallback((results) => {
+    isProcessingRef.current = true;
+
+    try {
     if (
       !results.multiHandLandmarks ||
       results.multiHandLandmarks.length === 0
@@ -254,6 +286,9 @@ export function useSignDetection(localVideoRef, sendMessage, userId, userName) {
 
     const landmarks63 = extractLandmarks(rawLandmarks);
     predictSign(landmarks63);
+    } finally {
+      isProcessingRef.current = false;
+    }
   }, [extractLandmarks, predictSign]);
 
   /* ──────────────────────────────────────────────────────────────────────
@@ -264,19 +299,30 @@ export function useSignDetection(localVideoRef, sendMessage, userId, userName) {
    * ──────────────────────────────────────────────────────────────────── */
   const loadModel = useCallback(async () => {
     try {
-      const model = await tf.loadLayersModel('/model/model.json');
+      if (!tfRef.current) {
+        tfRef.current = await import('@tensorflow/tfjs');
+      }
+
+      const tfLocal = tfRef.current;
+      const model = await tfLocal.loadLayersModel('/model/model.json');
 
       await loadScaler();
       await loadLabelEncoder();
 
       // Warm-up pass — avoids first-inference latency spike in the call.
-      tf.tidy(() => {
-        const dummy = tf.zeros([1, 63]);
+      tfLocal.tidy(() => {
+        const dummy = tfLocal.zeros([1, 63]);
         model.predict(dummy);
       });
 
       modelRef.current = model;
       setIsModelLoaded(true);
+
+      if (memoryCheckIntervalRef.current) {
+        clearInterval(memoryCheckIntervalRef.current);
+      }
+      memoryCheckIntervalRef.current = setInterval(memoryCheck, 30000);
+
       console.log('[SignDetect] TF.js model loaded successfully');
     } catch (err) {
       console.warn(
@@ -286,7 +332,7 @@ export function useSignDetection(localVideoRef, sendMessage, userId, userName) {
       setMockMode(true);
       setIsModelLoaded(true);  // treat mock as "ready"
     }
-  }, [loadScaler, loadLabelEncoder]);
+  }, [loadScaler, loadLabelEncoder, memoryCheck]);
 
   /* ──────────────────────────────────────────────────────────────────────
    * initMediaPipe
@@ -338,6 +384,11 @@ export function useSignDetection(localVideoRef, sendMessage, userId, userName) {
       animFrameRef.current = null;
     }
 
+    if (captureTimerRef.current != null) {
+      clearTimeout(captureTimerRef.current);
+      captureTimerRef.current = null;
+    }
+
     setCurrentSign(null);
     setIsHandDetected(false);
     setLandmarks(null);
@@ -356,8 +407,8 @@ export function useSignDetection(localVideoRef, sendMessage, userId, userName) {
     // Create the hidden canvas once.
     if (!canvasRef.current) {
       const canvas  = document.createElement('canvas');
-      canvas.width  = 640;
-      canvas.height = 480;
+      canvas.width  = 320;
+      canvas.height = 240;
       canvas.style.display = 'none';
       document.body.appendChild(canvas);
       canvasRef.current = canvas;
@@ -374,11 +425,23 @@ export function useSignDetection(localVideoRef, sendMessage, userId, userName) {
       const canvas = canvasRef.current;
       const hands  = handsRef.current;
 
+      if (isProcessingRef.current) {
+        captureTimerRef.current = setTimeout(() => {
+          if (isRunningRef.current) {
+            animFrameRef.current = requestAnimationFrame(captureLoop);
+          }
+        }, FRAME_INTERVAL);
+        return;
+      }
+
       if (video && canvas && hands && video.readyState >= 2) {
         try {
+          const frameStart = performance.now();
           const ctx = canvas.getContext('2d');
           ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
           await hands.send({ image: canvas });
+          const frameTime = measureLatency(frameStart);
+          logPerformance('frame-time', frameTime, 'ms');
         } catch (err) {
           // MediaPipe may throw if the tab is backgrounded — ignore.
           if (isRunningRef.current) {
@@ -388,14 +451,11 @@ export function useSignDetection(localVideoRef, sendMessage, userId, userName) {
       }
 
       // Schedule next capture at CAPTURE_FPS.
-      const id = setTimeout(() => {
+      captureTimerRef.current = setTimeout(() => {
         if (isRunningRef.current) {
           animFrameRef.current = requestAnimationFrame(captureLoop);
         }
       }, FRAME_INTERVAL);
-
-      // Store setTimeout id so stopCapture can cancel it if needed.
-      animFrameRef.current = id;
     };
 
     animFrameRef.current = requestAnimationFrame(captureLoop);
@@ -466,6 +526,11 @@ export function useSignDetection(localVideoRef, sendMessage, userId, userName) {
       if (modelRef.current) {
         modelRef.current.dispose();
         modelRef.current = null;
+      }
+
+      if (memoryCheckIntervalRef.current) {
+        clearInterval(memoryCheckIntervalRef.current);
+        memoryCheckIntervalRef.current = null;
       }
 
       // Close MediaPipe Hands pipeline.

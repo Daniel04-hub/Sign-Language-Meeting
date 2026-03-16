@@ -11,6 +11,7 @@ export function useWebRTC(roomCode, userId, userName, sendMessage) {
   const localVideoRef = useRef(null);
   const sendMessageRef = useRef(sendMessage);
   const reconnectingPeersRef = useRef(new Set());
+  const statsIntervalRef = useRef(null);
 
   useEffect(() => {
     sendMessageRef.current = sendMessage;
@@ -53,11 +54,34 @@ export function useWebRTC(roomCode, userId, userName, sendMessage) {
     });
   }, []);
 
+  const cleanupPeerConnection = useCallback((targetUserId) => {
+    const pc = peerConnections.current[targetUserId];
+    if (pc) {
+      pc.close();
+      delete peerConnections.current[targetUserId];
+    }
+
+    if (Object.keys(peerConnections.current).length === 0 && statsIntervalRef.current) {
+      clearInterval(statsIntervalRef.current);
+      statsIntervalRef.current = null;
+    }
+  }, []);
+
   const initializeMedia = useCallback(async () => {
     try {
       const stream = await navigator.mediaDevices.getUserMedia({
-        video: { width: 1280, height: 720, facingMode: 'user' },
-        audio: true,
+        video: {
+          width: { ideal: 1280, max: 1920 },
+          height: { ideal: 720, max: 1080 },
+          frameRate: { ideal: 30, max: 60 },
+          facingMode: 'user',
+        },
+        audio: {
+          echoCancellation: true,
+          noiseSuppression: true,
+          autoGainControl: true,
+          sampleRate: 48000,
+        },
       });
 
       localStream.current = stream;
@@ -139,6 +163,18 @@ export function useWebRTC(roomCode, userId, userName, sendMessage) {
       localStream.current.getTracks().forEach((track) => {
         pc.addTrack(track, localStream.current);
       });
+
+      const sender = pc.getSenders().find((currentSender) => currentSender.track?.kind === 'video');
+      if (sender) {
+        const params = sender.getParameters();
+        if (!params.encodings || params.encodings.length === 0) {
+          params.encodings = [{}];
+        }
+        params.encodings[0].maxBitrate = 500000;
+        sender.setParameters(params).catch((error) => {
+          console.warn('WebRTC: failed to apply sender parameters', error);
+        });
+      }
     }
 
     pc.onicecandidate = (event) => {
@@ -179,6 +215,10 @@ export function useWebRTC(roomCode, userId, userName, sendMessage) {
         attemptReconnect(targetUserId);
       }
 
+      if (pc.connectionState === 'disconnected' || pc.connectionState === 'closed') {
+        cleanupPeerConnection(targetUserId);
+      }
+
       if (pc.connectionState === 'connected') {
         setParticipantQuality((prev) => ({
           ...prev,
@@ -189,7 +229,7 @@ export function useWebRTC(roomCode, userId, userName, sendMessage) {
 
     peerConnections.current[targetUserId] = pc;
     return pc;
-  }, [attemptReconnect, participantQuality]);
+  }, [attemptReconnect, cleanupPeerConnection, participantQuality]);
 
   const handleUserJoined = useCallback(async (data) => {
     const existingUsers = data.existing_users ?? [];
@@ -288,13 +328,10 @@ export function useWebRTC(roomCode, userId, userName, sendMessage) {
   }, []);
 
   const handleUserLeft = useCallback((data) => {
-    const pc = peerConnections.current[data.user_id];
-    if (pc) {
-      pc.close();
-      delete peerConnections.current[data.user_id];
-    }
+    cleanupPeerConnection(data.user_id);
+
     removeParticipant(data.user_id);
-  }, [removeParticipant]);
+  }, [cleanupPeerConnection, removeParticipant]);
 
   const getConnectionStats = useCallback(() => {
     Object.entries(peerConnections.current).forEach(([peerId, pc]) => {
@@ -321,12 +358,19 @@ export function useWebRTC(roomCode, userId, userName, sendMessage) {
   }, []);
 
   useEffect(() => {
-    const interval = setInterval(() => {
+    if (statsIntervalRef.current) {
+      clearInterval(statsIntervalRef.current);
+    }
+
+    statsIntervalRef.current = setInterval(() => {
       getConnectionStats();
     }, 5000);
 
     return () => {
-      clearInterval(interval);
+      if (statsIntervalRef.current) {
+        clearInterval(statsIntervalRef.current);
+        statsIntervalRef.current = null;
+      }
     };
   }, [getConnectionStats]);
 
@@ -356,6 +400,11 @@ export function useWebRTC(roomCode, userId, userName, sendMessage) {
 
     Object.values(peerConnections.current).forEach((pc) => pc.close());
     peerConnections.current = {};
+
+    if (statsIntervalRef.current) {
+      clearInterval(statsIntervalRef.current);
+      statsIntervalRef.current = null;
+    }
 
     sendMessageRef.current('leave', {});
   }, []);
@@ -396,6 +445,9 @@ export function useWebRTC(roomCode, userId, userName, sendMessage) {
     return () => {
       localStream.current?.getTracks().forEach((track) => track.stop());
       Object.values(peerConnections.current).forEach((pc) => pc.close());
+      if (statsIntervalRef.current) {
+        clearInterval(statsIntervalRef.current);
+      }
     };
   }, []);
 

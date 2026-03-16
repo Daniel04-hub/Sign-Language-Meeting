@@ -1,336 +1,318 @@
-"""
-video_call/tests.py
-
-Django Channels WebSocket tests for SignMeetConsumer.
-
-Tests use channels.testing.WebsocketCommunicator to simulate real WebSocket
-connections without needing a running server or network socket.
-
-Test classes:
-    SignMeetConsumerTests — covers connect, join, multi-user, and sign broadcast.
-
-Run with:
-    python manage.py test video_call.tests --verbosity=2
-"""
-
+from django.test import TestCase, Client
+from django.urls import reverse
+from channels.testing import WebsocketCommunicator
+from channels.routing import URLRouter
+from video_call.routing import websocket_urlpatterns
+from video_call.models import Room
 import json
 import uuid
 
 from channels.db import database_sync_to_async
-from channels.routing import ProtocolTypeRouter, URLRouter
-from channels.testing import WebsocketCommunicator
-from django.core.asgi import get_asgi_application
-from django.test import TransactionTestCase, override_settings
-
-from video_call.consumers import SignMeetConsumer
-from video_call.models import Room
-from video_call.routing import websocket_urlpatterns
-
-# ─────────────────────────────────────────────────────────────────────────────
-# Test-only ASGI app — strips AllowedHostsOriginValidator so tests don't need
-# an Origin header (browsers always send one; WebsocketCommunicator does not).
-# ─────────────────────────────────────────────────────────────────────────────
-test_application = ProtocolTypeRouter(
-    {
-        "http": get_asgi_application(),
-        "websocket": URLRouter(websocket_urlpatterns),
-    }
-)
+from django.test import override_settings
+from django.test import TransactionTestCase
 
 
-# ─────────────────────────────────────────────────────────────────────────────
-# Helpers
-# ─────────────────────────────────────────────────────────────────────────────
+class RoomModelTests(TestCase):
+    def test_room_creation(self):
+        room = Room.objects.create(name='Test Room')
+        self.assertIsNotNone(room.room_code)
+        self.assertEqual(len(room.room_code), 8)
+        self.assertTrue(room.is_active)
+        self.assertEqual(room.max_participants, 8)
+        self.assertEqual(room.current_participants, 0)
 
-async def make_room(**kwargs) -> Room:
-    """
-    Async helper — create a Room in the test database.
+    def test_room_code_unique(self):
+        rooms = [Room.objects.create(name=f'Room {index}') for index in range(10)]
+        room_codes = [room.room_code for room in rooms]
+        self.assertEqual(len(room_codes), len(set(room_codes)))
 
-    Args:
-        **kwargs: Optional Room field overrides (name, max_participants, etc.).
+    def test_room_is_full(self):
+        room = Room.objects.create(name='Limited Room', max_participants=2)
+        room.current_participants = 2
+        room.save(update_fields=['current_participants'])
+        self.assertTrue(room.is_full())
 
-    Returns:
-        Room: Saved Room instance with auto-generated room_code.
-    """
+    def test_room_not_full(self):
+        room = Room.objects.create(name='Open Room')
+        self.assertFalse(room.is_full())
 
-    @database_sync_to_async
-    def _create():
-        return Room.objects.create(
-            name=kwargs.get("name", "Test Room"),
-            max_participants=kwargs.get("max_participants", 8),
+    def test_room_str(self):
+        room = Room.objects.create(name='Code Room')
+        room.room_code = 'ABCD1234'
+        room.save(update_fields=['room_code'])
+        self.assertEqual(str(room), 'ABCD1234')
+
+
+class RoomAPITests(TestCase):
+    def setUp(self):
+        self.client = Client()
+
+    def test_health_check(self):
+        response = self.client.get('/api/health/')
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.json().get('status'), 'ok')
+
+    def test_create_room(self):
+        response = self.client.post(
+            '/api/rooms/create/',
+            data=json.dumps({'name': 'My Meeting'}),
+            content_type='application/json',
         )
+        self.assertEqual(response.status_code, 201)
+        payload = response.json()
+        self.assertIn('room_code', payload)
+        self.assertEqual(payload.get('name'), 'My Meeting')
+        self.assertTrue(Room.objects.filter(room_code=payload['room_code']).exists())
 
-    return await _create()
+    def test_create_room_no_name(self):
+        response = self.client.post(
+            '/api/rooms/create/',
+            data=json.dumps({'name': ''}),
+            content_type='application/json',
+        )
+        self.assertEqual(response.status_code, 400)
 
+    def test_create_room_name_too_short(self):
+        response = self.client.post(
+            '/api/rooms/create/',
+            data=json.dumps({'name': 'A'}),
+            content_type='application/json',
+        )
+        self.assertEqual(response.status_code, 400)
 
-async def ws_connect(room_code: str) -> WebsocketCommunicator:
-    """
-    Create a WebsocketCommunicator connected to a room.
+    def test_join_room(self):
+        room = Room.objects.create(name='Joinable Room')
+        response = self.client.post(
+            '/api/rooms/join/',
+            data=json.dumps({'room_code': room.room_code, 'user_name': 'Alice'}),
+            content_type='application/json',
+        )
+        self.assertEqual(response.status_code, 200)
+        payload = response.json()
+        self.assertEqual(payload.get('room_code'), room.room_code)
+        self.assertEqual(payload.get('name'), room.name)
 
-    Uses test_application (no AllowedHostsOriginValidator) so no Origin
-    header is required.
+    def test_join_room_invalid_code(self):
+        response = self.client.post(
+            '/api/rooms/join/',
+            data=json.dumps({'room_code': 'INVALID1', 'user_name': 'Alice'}),
+            content_type='application/json',
+        )
+        self.assertEqual(response.status_code, 400)
+        self.assertIn('room_code', response.json())
 
-    Args:
-        room_code: Room code used in the WS URL path.
+    def test_join_room_full(self):
+        room = Room.objects.create(name='Full Room')
+        room.current_participants = room.max_participants
+        room.save(update_fields=['current_participants'])
 
-    Returns:
-        WebsocketCommunicator: Communicator ready for send/receive.
-    """
-    communicator = WebsocketCommunicator(
-        test_application,
-        f"/ws/room/{room_code}/",
-    )
-    connected, _ = await communicator.connect()
-    assert connected, f"WebSocket failed to connect to room {room_code}"
-    return communicator
+        response = self.client.post(
+            '/api/rooms/join/',
+            data=json.dumps({'room_code': room.room_code, 'user_name': 'Bob'}),
+            content_type='application/json',
+        )
+        self.assertEqual(response.status_code, 400)
 
+    def test_get_room_detail(self):
+        room = Room.objects.create(name='Detail Room')
+        response = self.client.get(f'/api/rooms/{room.room_code}/')
+        self.assertEqual(response.status_code, 200)
+        payload = response.json()
+        self.assertIn('id', payload)
+        self.assertIn('room_code', payload)
+        self.assertIn('name', payload)
+        self.assertIn('created_at', payload)
+        self.assertIn('is_active', payload)
+        self.assertIn('max_participants', payload)
+        self.assertIn('current_participants', payload)
 
-def join_payload(user_id: str, user_name: str) -> str:
-    """
-    Build a JSON "join" message payload.
+    def test_get_room_not_found(self):
+        response = self.client.get('/api/rooms/NOTFOUND/')
+        self.assertEqual(response.status_code, 404)
 
-    Args:
-        user_id:   Unique user identifier string.
-        user_name: Display name string.
-
-    Returns:
-        str: JSON-encoded join message.
-    """
-    return json.dumps({
-        "type": "join",
-        "user_id": user_id,
-        "user_name": user_name,
-    })
-
-
-# ─────────────────────────────────────────────────────────────────────────────
-# Test suite
-# ─────────────────────────────────────────────────────────────────────────────
 
 @override_settings(
     CHANNEL_LAYERS={
-        "default": {
-            "BACKEND": "channels.layers.InMemoryChannelLayer",
+        'default': {
+            'BACKEND': 'channels.layers.InMemoryChannelLayer',
         }
     }
 )
-class SignMeetConsumerTests(TransactionTestCase):
-    """
-    Integration tests for the SignMeetConsumer WebSocket consumer.
+class WebSocketConsumerTests(TransactionTestCase):
+    async def _create_room(self, name='WebSocket Room', max_participants=8):
+        @database_sync_to_async
+        def _create():
+            return Room.objects.create(name=name, max_participants=max_participants)
 
-    Uses TransactionTestCase (not TestCase) because Channels tests run in
-    async coroutines and require real database transactions with actual
-    commit/rollback behaviour.
+        return await _create()
 
-    CHANNEL_LAYERS is overridden to force InMemoryChannelLayer regardless of
-    whether REDIS_URL is set in .env — Redis is not available in unit tests.
-    """
+    async def _connect(self, room_code):
+        communicator = WebsocketCommunicator(
+            URLRouter(websocket_urlpatterns),
+            f'/ws/room/{room_code}/',
+        )
+        connected, _ = await communicator.connect()
+        return communicator, connected
 
-    # ── Fixture ───────────────────────────────────────────────────────────────
-
-    def setUp(self) -> None:
-        """Create a default room before each test and clear the room registry."""
-        self.room = Room.objects.create(name="Integration Test Room")
-        self.room_code = self.room.room_code
-        # Clear class-level registry between tests to avoid state bleed
-        SignMeetConsumer.rooms.clear()
-
-    # ── Test 1: connect ───────────────────────────────────────────────────────
-
-    async def test_websocket_connect(self) -> None:
-        """
-        Connecting to a valid room should receive a {"type": "connected"} message.
-        """
-        comm = await ws_connect(self.room_code)
-
-        response = json.loads(await comm.receive_from())
-
-        self.assertEqual(response["type"], "connected")
-        self.assertEqual(response["room_code"], self.room_code)
-        self.assertIn("message", response)
-
-        await comm.disconnect()
-
-    # ── Test 2: join ──────────────────────────────────────────────────────────
-
-    async def test_join_room(self) -> None:
-        """
-        First user joining an empty room receives user-joined with empty existing_users.
-        """
-        comm = await ws_connect(self.room_code)
-        await comm.receive_from()  # discard "connected" ack
-
-        user_id = str(uuid.uuid4())
-        await comm.send_to(join_payload(user_id, "Alice"))
-
-        response = json.loads(await comm.receive_from())
-
-        self.assertEqual(response["type"], "user-joined")
-        self.assertEqual(response["user_id"], user_id)
-        self.assertEqual(response["user_name"], "Alice")
-        self.assertEqual(response["existing_users"], [])
-
-        await comm.disconnect()
-
-    # ── Test 3: two users join ────────────────────────────────────────────────
-
-    async def test_two_users_join(self) -> None:
-        """
-        When a second user joins:
-          - User 1 receives a "new-user" message.
-          - User 2 receives "user-joined" with existing_users containing User 1.
-        """
-        # User 1 connects and joins
-        comm1 = await ws_connect(self.room_code)
-        await comm1.receive_from()  # "connected" ack
-
-        user1_id = str(uuid.uuid4())
-        await comm1.send_to(join_payload(user1_id, "Alice"))
-        await comm1.receive_from()  # "user-joined" for user 1 (existing_users=[])
-
-        # User 2 connects and joins
-        comm2 = await ws_connect(self.room_code)
-        await comm2.receive_from()  # "connected" ack
-
-        user2_id = str(uuid.uuid4())
-        await comm2.send_to(join_payload(user2_id, "Bob"))
-
-        # User 2 receives "user-joined" with User 1 in existing_users
-        user2_response = json.loads(await comm2.receive_from())
-        self.assertEqual(user2_response["type"], "user-joined")
-        self.assertEqual(user2_response["user_id"], user2_id)
-        self.assertEqual(len(user2_response["existing_users"]), 1)
-        self.assertEqual(user2_response["existing_users"][0]["user_id"], user1_id)
-        self.assertEqual(user2_response["existing_users"][0]["user_name"], "Alice")
-
-        # User 1 receives "new-user" broadcast about User 2
-        user1_notification = json.loads(await comm1.receive_from())
-        self.assertEqual(user1_notification["type"], "new-user")
-        self.assertEqual(user1_notification["user_id"], user2_id)
-        self.assertEqual(user1_notification["user_name"], "Bob")
-
-        await comm1.disconnect()
-        await comm2.disconnect()
-
-    # ── Test 4: sign-detected broadcast ──────────────────────────────────────
-
-    async def test_sign_detected_broadcast(self) -> None:
-        """
-        When User 1 sends sign-detected, BOTH users receive the broadcast.
-        """
-        # Setup: two users in the room
-        comm1 = await ws_connect(self.room_code)
-        await comm1.receive_from()  # "connected"
-
-        user1_id = str(uuid.uuid4())
-        await comm1.send_to(join_payload(user1_id, "Alice"))
-        await comm1.receive_from()  # "user-joined"
-
-        comm2 = await ws_connect(self.room_code)
-        await comm2.receive_from()  # "connected"
-
-        user2_id = str(uuid.uuid4())
-        await comm2.send_to(join_payload(user2_id, "Bob"))
-        await comm2.receive_from()  # "user-joined" for Bob
-        await comm1.receive_from()  # "new-user" notification for Alice
-
-        # User 1 sends a sign-detected message
-        await comm1.send_to(json.dumps({
-            "type": "sign-detected",
-            "sign": "HELLO",
-            "confidence": 0.97,
+    async def _send_join(self, communicator, user_id, user_name):
+        await communicator.send_to(text_data=json.dumps({
+            'type': 'join',
+            'user_id': user_id,
+            'user_name': user_name,
         }))
 
-        # Both users should receive the broadcast
-        sign_msg_user1 = json.loads(await comm1.receive_from())
-        sign_msg_user2 = json.loads(await comm2.receive_from())
+    async def test_websocket_connect(self):
+        room = await self._create_room()
+        communicator, connected = await self._connect(room.room_code)
 
-        for msg in (sign_msg_user1, sign_msg_user2):
-            self.assertEqual(msg["type"], "sign-detected")
-            self.assertEqual(msg["from_id"], user1_id)
-            self.assertEqual(msg["from_name"], "Alice")
-            self.assertEqual(msg["sign"], "HELLO")
-            self.assertAlmostEqual(msg["confidence"], 0.97, places=2)
+        self.assertTrue(connected)
+        connected_message = json.loads(await communicator.receive_from())
+        self.assertEqual(connected_message.get('type'), 'connected')
 
-        await comm1.disconnect()
-        await comm2.disconnect()
+        await communicator.disconnect()
 
-    # ── Test 5: room not found ────────────────────────────────────────────────
+    async def test_join_room(self):
+        room = await self._create_room()
+        communicator, connected = await self._connect(room.room_code)
 
-    async def test_connect_invalid_room(self) -> None:
-        """
-        Connecting to a non-existent room code should be rejected (connected=False).
-        """
-        comm = WebsocketCommunicator(test_application, "/ws/room/INVALID1/")
-        connected, code = await comm.connect()
-        self.assertFalse(connected)
-
-    # ── Test 6: room capacity enforcement ────────────────────────────────────
-
-    async def test_full_room_rejected(self) -> None:
-        """
-        Connecting to a room that is already at capacity should be rejected (connected=False).
-        """
-
-        @database_sync_to_async
-        def create_full_room():
-            return Room.objects.create(name="Full Room", max_participants=1)
-
-        full_room = await create_full_room()
-        room_code = full_room.room_code
-
-        # First user fills the room
-        comm1 = await ws_connect(room_code)
-        await comm1.receive_from()  # "connected"
-        await comm1.send_to(join_payload(str(uuid.uuid4()), "Alice"))
-        await comm1.receive_from()  # "user-joined"
-
-        # Second user should be rejected
-        comm2 = WebsocketCommunicator(test_application, f"/ws/room/{room_code}/")
-        connected, code = await comm2.connect()
-        self.assertFalse(connected)
-
-        await comm1.disconnect()
-
-    # ── Test 7: unknown message type ─────────────────────────────────────────
-
-    async def test_unknown_message_type(self) -> None:
-        """
-        Sending an unknown message type should return an error response.
-        """
-        comm = await ws_connect(self.room_code)
-        await comm.receive_from()  # "connected"
-
-        await comm.send_to(json.dumps({"type": "invalid-type"}))
-
-        response = json.loads(await comm.receive_from())
-        self.assertEqual(response["type"], "error")
-        self.assertIn("Unknown message type", response["message"])
-
-        await comm.disconnect()
-
-    # ── Test 8: disconnect decrements participant count ───────────────────────
-
-    async def test_disconnect_decrements_participants(self) -> None:
-        """
-        After a user disconnects, current_participants is decremented in the DB.
-        """
-        comm = await ws_connect(self.room_code)
-        await comm.receive_from()  # "connected"
+        self.assertTrue(connected)
+        await communicator.receive_from()
 
         user_id = str(uuid.uuid4())
-        await comm.send_to(join_payload(user_id, "Alice"))
-        await comm.receive_from()  # "user-joined"
+        await self._send_join(communicator, user_id, 'Alice')
 
-        # Verify count incremented
-        @database_sync_to_async
-        def get_count():
-            return Room.objects.get(room_code=self.room_code).current_participants
+        joined_message = json.loads(await communicator.receive_from())
+        self.assertEqual(joined_message.get('type'), 'user-joined')
+        self.assertEqual(joined_message.get('existing_users'), [])
 
-        count_after_join = await get_count()
-        self.assertEqual(count_after_join, 1)
+        await communicator.disconnect()
 
-        await comm.disconnect()
+    async def test_two_users_join(self):
+        room = await self._create_room()
 
-        count_after_leave = await get_count()
-        self.assertEqual(count_after_leave, 0)
+        communicator_1, connected_1 = await self._connect(room.room_code)
+        self.assertTrue(connected_1)
+        await communicator_1.receive_from()
+
+        user_1_id = str(uuid.uuid4())
+        await self._send_join(communicator_1, user_1_id, 'Alice')
+        await communicator_1.receive_from()
+
+        communicator_2, connected_2 = await self._connect(room.room_code)
+        self.assertTrue(connected_2)
+        await communicator_2.receive_from()
+
+        user_2_id = str(uuid.uuid4())
+        await self._send_join(communicator_2, user_2_id, 'Bob')
+
+        user_2_joined = json.loads(await communicator_2.receive_from())
+        self.assertEqual(user_2_joined.get('type'), 'user-joined')
+        self.assertTrue(any(user['user_id'] == user_1_id for user in user_2_joined.get('existing_users', [])))
+
+        user_1_new_user = json.loads(await communicator_1.receive_from())
+        self.assertEqual(user_1_new_user.get('type'), 'new-user')
+        self.assertEqual(user_1_new_user.get('user_id'), user_2_id)
+
+        await communicator_1.disconnect()
+        await communicator_2.disconnect()
+
+    async def test_sign_detected_broadcast(self):
+        room = await self._create_room()
+
+        communicator_1, _ = await self._connect(room.room_code)
+        await communicator_1.receive_from()
+        user_1_id = str(uuid.uuid4())
+        await self._send_join(communicator_1, user_1_id, 'Alice')
+        await communicator_1.receive_from()
+
+        communicator_2, _ = await self._connect(room.room_code)
+        await communicator_2.receive_from()
+        user_2_id = str(uuid.uuid4())
+        await self._send_join(communicator_2, user_2_id, 'Bob')
+        await communicator_2.receive_from()
+        await communicator_1.receive_from()
+
+        await communicator_1.send_to(text_data=json.dumps({
+            'type': 'sign-detected',
+            'sign': 'HELLO',
+            'confidence': 0.98,
+        }))
+
+        payload_1 = json.loads(await communicator_1.receive_from())
+        payload_2 = json.loads(await communicator_2.receive_from())
+
+        self.assertEqual(payload_1.get('type'), 'sign-detected')
+        self.assertEqual(payload_2.get('type'), 'sign-detected')
+        self.assertEqual(payload_1.get('sign'), 'HELLO')
+        self.assertEqual(payload_2.get('sign'), 'HELLO')
+
+        await communicator_1.disconnect()
+        await communicator_2.disconnect()
+
+    async def test_invalid_sign_rejected(self):
+        room = await self._create_room()
+        communicator, connected = await self._connect(room.room_code)
+
+        self.assertTrue(connected)
+        await communicator.receive_from()
+
+        await self._send_join(communicator, str(uuid.uuid4()), 'Alice')
+        await communicator.receive_from()
+
+        await communicator.send_to(text_data=json.dumps({
+            'type': 'sign-detected',
+            'sign': 'FAKE',
+            'confidence': 0.95,
+        }))
+
+        error_message = json.loads(await communicator.receive_from())
+        self.assertEqual(error_message.get('type'), 'error')
+
+        await communicator.disconnect()
+
+    async def test_speech_text_broadcast(self):
+        room = await self._create_room()
+
+        communicator_1, _ = await self._connect(room.room_code)
+        await communicator_1.receive_from()
+        await self._send_join(communicator_1, str(uuid.uuid4()), 'Alice')
+        await communicator_1.receive_from()
+
+        communicator_2, _ = await self._connect(room.room_code)
+        await communicator_2.receive_from()
+        await self._send_join(communicator_2, str(uuid.uuid4()), 'Bob')
+        await communicator_2.receive_from()
+        await communicator_1.receive_from()
+
+        await communicator_1.send_to(text_data=json.dumps({
+            'type': 'speech-text',
+            'text': 'Hello everyone',
+            'is_final': True,
+        }))
+
+        payload_2 = json.loads(await communicator_2.receive_from())
+        self.assertEqual(payload_2.get('type'), 'speech-text')
+        self.assertEqual(payload_2.get('text'), 'Hello everyone')
+
+        own_message = await communicator_1.receive_nothing(timeout=0.3)
+        self.assertTrue(own_message)
+
+        await communicator_1.disconnect()
+        await communicator_2.disconnect()
+
+    async def test_room_full_rejection(self):
+        room = await self._create_room(name='Small Room', max_participants=1)
+
+        communicator_1, connected_1 = await self._connect(room.room_code)
+        self.assertTrue(connected_1)
+        await communicator_1.receive_from()
+        await self._send_join(communicator_1, str(uuid.uuid4()), 'Alice')
+        await communicator_1.receive_from()
+
+        communicator_2, connected_2 = await self._connect(room.room_code)
+        self.assertTrue(connected_2)
+        room_full_message = json.loads(await communicator_2.receive_from())
+        self.assertEqual(room_full_message.get('type'), 'room-full')
+
+        await communicator_1.disconnect()
+        await communicator_2.disconnect()

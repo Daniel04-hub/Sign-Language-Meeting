@@ -116,6 +116,12 @@ class SignMeetConsumer(AsyncWebsocketConsumer):
                 room.current_participants,
                 room.max_participants,
             )
+            await self.accept()
+            await self.send(text_data=json.dumps({
+                "type": "room-full",
+                "message": f"Room is full. Maximum {room.max_participants} participants.",
+                "max_participants": room.max_participants,
+            }))
             await self.close(code=4403)
             return
 
