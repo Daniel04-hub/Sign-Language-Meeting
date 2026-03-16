@@ -1,24 +1,11 @@
 /**
  * hooks/useWebSocket.js
  *
- * Custom hook that manages a persistent WebSocket connection to the
- * SignMeet backend.  Handles automatic exponential-backoff reconnection,
- * join handshake, and exposes a stable `sendMessage` helper.
- *
- * @param {string}   roomCode   - 8-character room identifier
- * @param {string}   userId     - UUID identifying the local user
- * @param {string}   userName   - display name of the local user
- * @param {Function} onMessage  - callback(parsedObject) invoked on every
- *                                inbound message
+ * Persistent WebSocket hook with robust reconnection and status tracking.
  */
 
 import { useRef, useState, useEffect, useCallback } from 'react';
 
-const MAX_RETRIES      = 5;
-const BASE_DELAY_MS    = 1000;   // 1 s → 2 s → 4 s → 8 s → 16 s
-
-/** Build the WebSocket URL from the current host in production,
- *  or fall back to localhost:8000 in development (Vite proxy). */
 function buildWsUrl(roomCode) {
   if (import.meta.env.DEV) {
     return `ws://localhost:8000/ws/room/${roomCode}/`;
@@ -27,150 +14,169 @@ function buildWsUrl(roomCode) {
   return `${protocol}//${window.location.host}/ws/room/${roomCode}/`;
 }
 
-/**
- * useWebSocket
- *
- * @returns {{
- *   isConnected: boolean,
- *   sendMessage: (type: string, data?: object) => void,
- *   reconnect:   () => void,
- * }}
- */
 export function useWebSocket(roomCode, userId, userName, onMessage) {
-  const socketRef    = useRef(null);
-  const retriesRef   = useRef(0);
-  const mountedRef   = useRef(true);
+  const socket = useRef(null);
   const onMessageRef = useRef(onMessage);
-
-  // Keep the callback ref fresh so consumers can pass an inline function
-  // without triggering a reconnect.
-  useEffect(() => { onMessageRef.current = onMessage; }, [onMessage]);
+  const reconnectAttempts = useRef(0);
+  const reconnectTimer = useRef(null);
+  const maxReconnectAttempts = 5;
+  const isIntentionalClose = useRef(false);
+  const mountedRef = useRef(true);
 
   const [isConnected, setIsConnected] = useState(false);
+  const [connectionStatus, setConnectionStatus] = useState('connecting');
+  const [reconnectAttemptCount, setReconnectAttemptCount] = useState(0);
 
-  /** ------------------------------------------------------------------ *
-   * connect()
-   * Opens a new WebSocket and wires up all event handlers.
-   * -------------------------------------------------------------------- */
-  const connect = useCallback(function connectSocket() {
-    if (!roomCode || !userId || !userName) return;
+  useEffect(() => {
+    onMessageRef.current = onMessage;
+  }, [onMessage]);
 
-    // Tear down any stale socket before creating a new one.
-    if (socketRef.current) {
-      socketRef.current.onclose = null;   // prevent recursive reconnect
-      socketRef.current.close();
+  const sendMessage = useCallback((type, data = {}) => {
+    if (socket.current?.readyState === WebSocket.OPEN) {
+      socket.current.send(JSON.stringify({ type, user_id: userId, ...data }));
+      return;
+    }
+    console.warn('WebSocket: Cannot send message, socket not open', type);
+  }, [userId]);
+
+  const connect = useCallback(() => {
+    if (!roomCode || !userId || !userName) {
+      return;
     }
 
-    const url = buildWsUrl(roomCode);
-    console.log(`[WS] Connecting → ${url}  (attempt ${retriesRef.current + 1})`);
+    if (reconnectTimer.current) {
+      clearTimeout(reconnectTimer.current);
+      reconnectTimer.current = null;
+    }
 
-    const ws = new WebSocket(url);
-    socketRef.current = ws;
+    setConnectionStatus('connecting');
 
-    /** onopen — send join message immediately */
+    if (socket.current) {
+      socket.current.onclose = null;
+      socket.current.close();
+    }
+
+    const ws = new WebSocket(buildWsUrl(roomCode));
+    socket.current = ws;
+
     ws.onopen = () => {
-      if (!mountedRef.current) { ws.close(); return; }
-      console.log('[WS] Connection opened');
-      retriesRef.current = 0;
-      setIsConnected(true);
-
-      ws.send(JSON.stringify({
-        type:      'join',
-        room_code: roomCode,
-        user_id:   userId,
-        user_name: userName,
-      }));
-    };
-
-    /** onmessage — parse JSON and call consumer callback */
-    ws.onmessage = (event) => {
-      try {
-        const data = JSON.parse(event.data);
-        console.log('[WS] ←', data.type, data);
-        onMessageRef.current?.(data);
-      } catch (err) {
-        console.error('[WS] Failed to parse message:', err, event.data);
-      }
-    };
-
-    /** onerror — log and mark disconnected */
-    ws.onerror = (err) => {
-      console.error('[WS] Socket error:', err);
-      setIsConnected(false);
-    };
-
-    /** onclose — attempt exponential-backoff reconnect */
-    ws.onclose = (event) => {
-      if (!mountedRef.current) return;
-      setIsConnected(false);
-      console.warn(`[WS] Closed (code=${event.code}, clean=${event.wasClean})`);
-
-      // 4xxx codes are intentional (room not found, room full, user left).
-      if (event.code >= 4000 && event.code < 5000) {
-        console.info('[WS] Server closed connection intentionally — not retrying');
+      if (!mountedRef.current) {
+        ws.close();
         return;
       }
 
-      if (retriesRef.current < MAX_RETRIES) {
-        const delay = BASE_DELAY_MS * Math.pow(2, retriesRef.current);
-        console.info(`[WS] Reconnecting in ${delay}ms (retry ${retriesRef.current + 1}/${MAX_RETRIES})`);
-        retriesRef.current += 1;
-        setTimeout(() => {
-          if (mountedRef.current) connectSocket();
-        }, delay);
-      } else {
-        console.error('[WS] Max retries reached. Giving up.');
+      reconnectAttempts.current = 0;
+      setReconnectAttemptCount(0);
+      setIsConnected(true);
+      setConnectionStatus('connected');
+
+      sendMessage('join', {
+        room_code: roomCode,
+        user_id: userId,
+        user_name: userName,
+      });
+    };
+
+    ws.onmessage = (event) => {
+      try {
+        const parsed = JSON.parse(event.data);
+        onMessageRef.current?.(parsed);
+      } catch (error) {
+        console.error('WebSocket: Failed to parse incoming message', error);
       }
     };
-  }, [roomCode, userId, userName]);
 
-  /** ------------------------------------------------------------------ *
-   * Mount / unmount lifecycle
-   * -------------------------------------------------------------------- */
+    ws.onerror = (error) => {
+      console.error('WebSocket: Socket error', error);
+    };
+
+    ws.onclose = () => {
+      setIsConnected(false);
+
+      if (!mountedRef.current) {
+        return;
+      }
+
+      if (isIntentionalClose.current) {
+        return;
+      }
+
+      setConnectionStatus('disconnected');
+
+      if (reconnectAttempts.current >= maxReconnectAttempts) {
+        setConnectionStatus('failed');
+        console.error('WebSocket: Max reconnect attempts reached');
+        return;
+      }
+
+      const delay = Math.min(
+        1000 * Math.pow(2, reconnectAttempts.current),
+        16000,
+      );
+
+      reconnectAttempts.current += 1;
+      setReconnectAttemptCount(reconnectAttempts.current);
+
+      console.log(
+        'WebSocket: Reconnecting in',
+        delay,
+        'ms',
+        'attempt',
+        reconnectAttempts.current,
+      );
+
+      setConnectionStatus('reconnecting');
+
+      reconnectTimer.current = setTimeout(() => {
+        connect();
+      }, delay);
+    };
+  }, [roomCode, userId, userName, sendMessage]);
+
+  const reconnect = useCallback(() => {
+    isIntentionalClose.current = false;
+    reconnectAttempts.current = 0;
+    setReconnectAttemptCount(0);
+    connect();
+  }, [connect]);
+
+  const disconnect = useCallback(() => {
+    isIntentionalClose.current = true;
+    if (reconnectTimer.current) {
+      clearTimeout(reconnectTimer.current);
+      reconnectTimer.current = null;
+    }
+    if (socket.current) {
+      socket.current.close();
+    }
+    setIsConnected(false);
+    setConnectionStatus('disconnected');
+  }, []);
+
   useEffect(() => {
     mountedRef.current = true;
-    retriesRef.current = 0;
+    isIntentionalClose.current = false;
     connect();
 
     return () => {
       mountedRef.current = false;
-      if (socketRef.current) {
-        socketRef.current.onclose = null;
-        socketRef.current.close(1000, 'Component unmounted');
+      isIntentionalClose.current = true;
+      if (reconnectTimer.current) {
+        clearTimeout(reconnectTimer.current);
+      }
+      if (socket.current) {
+        socket.current.onclose = null;
+        socket.current.close();
       }
     };
   }, [connect]);
 
-  /** ------------------------------------------------------------------ *
-   * sendMessage(type, data)
-   *
-   * Serialises and sends a JSON message over the open socket.
-   * Silently drops the message if the socket is not OPEN.
-   *
-   * @param {string} type  - WS message type (e.g. "webrtc-offer")
-   * @param {object} data  - additional payload merged into the envelope
-   * -------------------------------------------------------------------- */
-  const sendMessage = useCallback((type, data = {}) => {
-    if (socketRef.current?.readyState === WebSocket.OPEN) {
-      const payload = JSON.stringify({ type, user_id: userId, ...data });
-      console.log('[WS] →', type, data);
-      socketRef.current.send(payload);
-    } else {
-      console.warn('[WS] sendMessage called but socket is not open (state=',
-        socketRef.current?.readyState, ')');
-    }
-  }, [userId]);
-
-  /** ------------------------------------------------------------------ *
-   * reconnect()
-   *
-   * Public method: lets consumers trigger a manual reconnect attempt,
-   * e.g. after a user-visible "Reconnect" button click.
-   * -------------------------------------------------------------------- */
-  const reconnect = useCallback(() => {
-    retriesRef.current = 0;
-    connect();
-  }, [connect]);
-
-  return { isConnected, sendMessage, reconnect };
+  return {
+    isConnected,
+    sendMessage,
+    reconnect,
+    disconnect,
+    connectionStatus,
+    reconnectAttempts: reconnectAttemptCount,
+  };
 }

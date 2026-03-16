@@ -6,16 +6,18 @@
  */
 
 import { useState, useEffect } from 'react';
-import { useNavigate } from 'react-router-dom';
+import { useNavigate, useLocation } from 'react-router-dom';
 import { v4 as uuidv4 } from 'uuid';
 import axios from 'axios';
 import LoadingSpinner from '../components/LoadingSpinner';
 
 function HomePage() {
   const navigate = useNavigate();
+  const location = useLocation();
 
   // ── shared state ──────────────────────────────────────────────
   const [error, setError] = useState('');
+  const [createError, setCreateError] = useState('');
 
   // ── create-room form ──────────────────────────────────────────
   const [createName,   setCreateName]   = useState('');
@@ -32,6 +34,13 @@ function HomePage() {
     const timer = setTimeout(() => setIsPageVisible(true), 10);
     return () => clearTimeout(timer);
   }, []);
+
+  useEffect(() => {
+    if (location.state?.error) {
+      setCreateError(location.state.error);
+      window.history.replaceState({}, '', '/');
+    }
+  }, [location.state]);
 
   // ── helpers ───────────────────────────────────────────────────
   function saveSession(userName, roomCode) {
@@ -112,9 +121,9 @@ function HomePage() {
         </div>
 
         {/* ── global error ── */}
-        {error && (
+        {(createError || error) && (
           <div className="alert alert-danger text-center mb-4" role="alert">
-            {error}
+            {createError || error}
           </div>
         )}
 

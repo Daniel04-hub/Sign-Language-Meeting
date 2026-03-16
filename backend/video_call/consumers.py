@@ -43,9 +43,11 @@ NOTE: This in-memory dict only works correctly with InMemoryChannelLayer (single
 import json
 import logging
 import time
+import asyncio
 
 from channels.db import database_sync_to_async
 from channels.generic.websocket import AsyncWebsocketConsumer
+from django.db import DatabaseError
 
 logger = logging.getLogger(__name__)
 
@@ -89,11 +91,20 @@ class SignMeetConsumer(AsyncWebsocketConsumer):
         self.user_name: str = ""
         self.last_speech_time: float = 0.0
         self.sign_count: int = 0
+        self.join_timeout_task = None
 
         # Fetch room from DB
-        room = await self._get_room(self.room_code)
+        try:
+            room = await self._get_room(self.room_code)
+        except DatabaseError as exc:
+            logger.error("Database error during connect for room %s: %s", self.room_code, exc)
+            await self.send_error("Database error occurred")
+            await self.close(code=4500)
+            return
+
         if room is None:
             logger.warning("WebSocket connect rejected: room %s not found.", self.room_code)
+            await self.send_error("Room not found")
             await self.close(code=4404)
             return
 
@@ -125,6 +136,8 @@ class SignMeetConsumer(AsyncWebsocketConsumer):
             "room_code": self.room_code,
         }))
 
+        self.join_timeout_task = asyncio.create_task(self._enforce_join_timeout())
+
         logger.info("WebSocket connected: channel %s → room %s", self.channel_name, self.room_code)
 
     async def disconnect(self, close_code: int) -> None:
@@ -147,6 +160,10 @@ class SignMeetConsumer(AsyncWebsocketConsumer):
             close_code,
         )
 
+        if self.join_timeout_task is not None:
+            self.join_timeout_task.cancel()
+            self.join_timeout_task = None
+
         # Remove from in-memory registry
         if (
             self.room_code in SignMeetConsumer.rooms
@@ -159,7 +176,10 @@ class SignMeetConsumer(AsyncWebsocketConsumer):
 
         # Decrement DB participant count (only if user had joined properly)
         if self.user_id:
-            await self._decrement_participants(self.room_code)
+            try:
+                await self._decrement_participants(self.room_code)
+            except DatabaseError as exc:
+                logger.error("Failed to decrement participants for room %s: %s", self.room_code, exc)
 
         # Notify remaining users
         if self.user_id:
@@ -187,27 +207,29 @@ class SignMeetConsumer(AsyncWebsocketConsumer):
         """
         try:
             data = json.loads(text_data)
+
+            message_type = data.get("type", "")
+
+            handlers = {
+                "join": self.handle_join,
+                "webrtc-offer": self.handle_webrtc_offer,
+                "webrtc-answer": self.handle_webrtc_answer,
+                "ice-candidate": self.handle_ice_candidate,
+                "sign-detected": self.handle_sign_detected,
+                "speech-text": self.handle_speech_text,
+            }
+
+            handler = handlers.get(message_type)
+            if handler is None:
+                await self.send_error(f"Unknown message type: '{message_type}'.")
+                return
+
+            await handler(data)
         except json.JSONDecodeError:
-            await self._send_error("Invalid JSON payload.")
-            return
-
-        message_type = data.get("type", "")
-
-        handlers = {
-            "join": self.handle_join,
-            "webrtc-offer": self.handle_webrtc_offer,
-            "webrtc-answer": self.handle_webrtc_answer,
-            "ice-candidate": self.handle_ice_candidate,
-            "sign-detected": self.handle_sign_detected,
-            "speech-text": self.handle_speech_text,
-        }
-
-        handler = handlers.get(message_type)
-        if handler is None:
-            await self._send_error(f"Unknown message type: '{message_type}'.")
-            return
-
-        await handler(data)
+            await self.send_error("Invalid message format")
+        except Exception as exc:
+            logger.error(f"Consumer error: {exc}")
+            await self.send_error("Server error occurred")
 
     # ─────────────────────────────────────────────────────────────────────────
     # Message handlers
@@ -231,11 +253,15 @@ class SignMeetConsumer(AsyncWebsocketConsumer):
         user_name = data.get("user_name", "Anonymous").strip()
 
         if not user_id:
-            await self._send_error("join message missing required field: user_id.")
+            await self.send_error("join message missing required field: user_id.")
             return
 
         self.user_id = user_id
         self.user_name = user_name
+
+        if self.join_timeout_task is not None:
+            self.join_timeout_task.cancel()
+            self.join_timeout_task = None
 
         # Capture existing users BEFORE adding self
         existing_users = [
@@ -253,7 +279,12 @@ class SignMeetConsumer(AsyncWebsocketConsumer):
         }
 
         # Persist participant count to DB
-        await self._increment_participants(self.room_code)
+        try:
+            await self._increment_participants(self.room_code)
+        except DatabaseError as exc:
+            logger.error("Failed to increment participants for room %s: %s", self.room_code, exc)
+            await self.send_error("Database error occurred")
+            return
 
         # Tell joining user who's already here
         await self.send(text_data=json.dumps({
@@ -294,7 +325,7 @@ class SignMeetConsumer(AsyncWebsocketConsumer):
         sdp = data.get("sdp")
 
         if not target_id or sdp is None:
-            await self._send_error("webrtc-offer requires target_id and sdp.")
+            await self.send_error("webrtc-offer requires target_id and sdp.")
             return
 
         await self.send_to_user(target_id, {
@@ -318,7 +349,7 @@ class SignMeetConsumer(AsyncWebsocketConsumer):
         sdp = data.get("sdp")
 
         if not target_id or sdp is None:
-            await self._send_error("webrtc-answer requires target_id and sdp.")
+            await self.send_error("webrtc-answer requires target_id and sdp.")
             return
 
         await self.send_to_user(target_id, {
@@ -342,7 +373,7 @@ class SignMeetConsumer(AsyncWebsocketConsumer):
         candidate = data.get("candidate")
 
         if not target_id or candidate is None:
-            await self._send_error("ice-candidate requires target_id and candidate.")
+            await self.send_error("ice-candidate requires target_id and candidate.")
             return
 
         await self.send_to_user(target_id, {
@@ -369,21 +400,21 @@ class SignMeetConsumer(AsyncWebsocketConsumer):
         sign = str(raw_sign).strip().upper()
 
         if not sign:
-            await self._send_error("sign-detected requires sign field.")
+            await self.send_error("sign-detected requires sign field.")
             return
 
         if sign not in self.VALID_SIGNS:
-            await self._send_error("Invalid sign label.")
+            await self.send_error("Invalid sign label.")
             return
 
         try:
             confidence = float(data.get("confidence", 0.0))
         except (TypeError, ValueError):
-            await self._send_error("Invalid confidence value.")
+            await self.send_error("Invalid confidence value.")
             return
 
         if confidence < 0 or confidence > 1:
-            await self._send_error("Confidence must be between 0 and 1.")
+            await self.send_error("Confidence must be between 0 and 1.")
             return
 
         self.sign_count += 1
@@ -535,6 +566,12 @@ class SignMeetConsumer(AsyncWebsocketConsumer):
             },
         )
 
+    async def send_error(self, message: str) -> None:
+        await self.send(text_data=json.dumps({
+            "type": "error",
+            "message": message,
+        }))
+
     async def _send_error(self, message: str) -> None:
         """
         Send an error message back to this connection only.
@@ -543,10 +580,17 @@ class SignMeetConsumer(AsyncWebsocketConsumer):
             message: Human-readable error description.
         """
         logger.warning("SignMeetConsumer error → %s: %s", self.channel_name, message)
-        await self.send(text_data=json.dumps({
-            "type": "error",
-            "message": message,
-        }))
+        await self.send_error(message)
+
+    async def _enforce_join_timeout(self) -> None:
+        try:
+            await asyncio.sleep(30)
+            if not self.user_id:
+                logger.warning("Join timeout: closing connection for room %s", self.room_code)
+                await self.send_error("Join timeout")
+                await self.close(code=4408)
+        except asyncio.CancelledError:
+            return
 
     # ─────────────────────────────────────────────────────────────────────────
     # Database helpers (sync_to_async wrappers)
@@ -569,6 +613,9 @@ class SignMeetConsumer(AsyncWebsocketConsumer):
             return Room.objects.get(room_code=room_code, is_active=True)
         except Room.DoesNotExist:
             return None
+        except DatabaseError:
+            logger.exception("Database error while fetching room %s", room_code)
+            raise
 
     @database_sync_to_async
     def _increment_participants(self, room_code: str) -> None:
@@ -582,9 +629,13 @@ class SignMeetConsumer(AsyncWebsocketConsumer):
 
         from .models import Room
 
-        Room.objects.filter(room_code=room_code).update(
-            current_participants=F("current_participants") + 1
-        )
+        try:
+            Room.objects.filter(room_code=room_code).update(
+                current_participants=F("current_participants") + 1
+            )
+        except DatabaseError:
+            logger.exception("Database error while incrementing participants for %s", room_code)
+            raise
 
     @database_sync_to_async
     def _decrement_participants(self, room_code: str) -> None:
@@ -599,6 +650,10 @@ class SignMeetConsumer(AsyncWebsocketConsumer):
 
         from .models import Room
 
-        Room.objects.filter(room_code=room_code).update(
-            current_participants=Greatest(F("current_participants") - 1, Value(0))
-        )
+        try:
+            Room.objects.filter(room_code=room_code).update(
+                current_participants=Greatest(F("current_participants") - 1, Value(0))
+            )
+        except DatabaseError:
+            logger.exception("Database error while decrementing participants for %s", room_code)
+            raise

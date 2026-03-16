@@ -37,6 +37,8 @@ import Toast from '../components/Toast';
 import TTSControls from '../components/TTSControls';
 import ParticipantSidebar from '../components/ParticipantSidebar';
 import WaitingState from '../components/WaitingState';
+import MediaErrorScreen from '../components/MediaErrorScreen';
+import ConnectionStatusBar from '../components/ConnectionStatusBar';
 import {
   setTTSVolume,
   setTTSEnabled,
@@ -63,7 +65,6 @@ function RoomPage() {
   // ── local UI state ────────────────────────────────────────────────────
   const [caption, setCaption] = useState(null);   // {text, fromName, isFinal}
   const [signDetections, setSignDetections] = useState({});     // {userId: signText}
-  const [mediaError, setMediaError] = useState('');
   const [showPermissionModal, setShowPermissionModal] = useState(false);
   const [permissionType, setPermissionType] = useState('microphone');
   const [toast, setToast] = useState({ show: false, message: '', type: 'info' });
@@ -101,6 +102,8 @@ function RoomPage() {
     toggleCamera,
     leaveRoom,
     handleWebSocketMessage: routeWebRTCMessage,
+    mediaError,
+    setMediaError,
   } = useWebRTC(roomCode, userId, userName, (type, data) => {
     sendMessageRef.current(type, data);
   });
@@ -118,6 +121,18 @@ function RoomPage() {
       case 'user-left':
         routeWebRTCMessage(message);
         break;
+
+      case 'room-full': {
+        navigate('/', {
+          state: { error: 'Room is full. Maximum 8 participants.' },
+        });
+        break;
+      }
+
+      case 'error': {
+        showToast(message.message || 'Server error occurred', 'error');
+        break;
+      }
 
       // Sign language detection result (broadcast by server to ALL users).
       case 'sign-detected': {
@@ -163,10 +178,17 @@ function RoomPage() {
       default:
         break;
     }
-  }, [routeWebRTCMessage, userId]);
+  }, [routeWebRTCMessage, userId, navigate, showToast]);
 
   // ── WebSocket hook ────────────────────────────────────────────────────
-  const { isConnected, sendMessage, reconnect } = useWebSocket(
+  const {
+    isConnected,
+    sendMessage,
+    reconnect,
+    disconnect,
+    connectionStatus,
+    reconnectAttempts,
+  } = useWebSocket(
     roomCode,
     userId,
     userName,
@@ -265,20 +287,35 @@ function RoomPage() {
 
   // ── media initialisation ──────────────────────────────────────────────
   useEffect(() => {
-    let cancelled = false;
-    initializeMedia().catch(err => {
-      if (!cancelled) setMediaError(err.message ?? 'Camera / microphone access denied.');
+    initializeMedia().catch(() => {
     });
-    return () => { cancelled = true; };
   }, []); // eslint-disable-line react-hooks/exhaustive-deps
 
+  useEffect(() => {
+    const handleBeforeUnload = () => {
+      leaveRoom();
+      disconnect();
+    };
+
+    window.addEventListener('beforeunload', handleBeforeUnload);
+    return () => {
+      window.removeEventListener('beforeunload', handleBeforeUnload);
+    };
+  }, [leaveRoom, disconnect]);
+
   // ── leave ─────────────────────────────────────────────────────────────
+  const cancelSpeech = useCallback(() => {
+    stopListening();
+  }, [stopListening]);
+
   const handleLeave = useCallback(() => {
-    if (isSignModeOn) stopSignDetection();
+    cancelSpeech();
+    stopSignDetection();
     stopListening();
     leaveRoom();
+    disconnect();
     navigate('/');
-  }, [isSignModeOn, stopSignDetection, stopListening, leaveRoom, navigate]);
+  }, [cancelSpeech, stopSignDetection, stopListening, leaveRoom, disconnect, navigate]);
 
   // ── sign mode toggle ───────────────────────────────────────────────────
   const handleToggleSign = useCallback(() => {
@@ -399,6 +436,19 @@ function RoomPage() {
     ? '1 person'
     : `${participants.length} people`;
 
+  if (mediaError) {
+    return (
+      <MediaErrorScreen
+        error={mediaError}
+        onRetry={() => {
+          setMediaError(null);
+          initializeMedia().catch(() => {
+          });
+        }}
+      />
+    );
+  }
+
   // ─────────────────────────────────────────────────────────────────────
   //  Render
   // ─────────────────────────────────────────────────────────────────────
@@ -480,11 +530,7 @@ function RoomPage() {
       </nav>
 
       {/* ── media error banner ────────────────────────────────────── */}
-      {mediaError && (
-        <div className="alert alert-warning mb-0 py-2 text-center" style={{ borderRadius: 0, flexShrink: 0 }}>
-          ⚠️ {mediaError} — others won't see or hear you.
-        </div>
-      )}
+      <ConnectionStatusBar status={connectionStatus} attemptNumber={reconnectAttempts} />
 
       {/* ── video grid / waiting state ───────────────────────────── */}
       <div id="video-grid" style={{ flex: 1, overflow: 'hidden', padding: '12px 12px 0' }}>
