@@ -87,7 +87,7 @@ export function useWebRTC(roomCode, userId, userName, sendMessage) {
       } else {
         setMediaError({
           type: 'unknown',
-          message: error?.message || 'Unknown media error',
+          message: error?.message,
         });
       }
 
@@ -121,6 +121,7 @@ export function useWebRTC(roomCode, userId, userName, sendMessage) {
 
       sendMessageRef.current('webrtc-offer', {
         target_id: targetUserId,
+        sdp: pc.localDescription.toJSON(),
         offer: pc.localDescription.toJSON(),
       });
     } catch (error) {
@@ -209,6 +210,7 @@ export function useWebRTC(roomCode, userId, userName, sendMessage) {
         await pc.setLocalDescription(offer);
         sendMessageRef.current('webrtc-offer', {
           target_id: user.user_id,
+          sdp: pc.localDescription.toJSON(),
           offer: pc.localDescription.toJSON(),
         });
       } catch (error) {
@@ -250,6 +252,7 @@ export function useWebRTC(roomCode, userId, userName, sendMessage) {
       await pc.setLocalDescription(answer);
       sendMessageRef.current('webrtc-answer', {
         target_id: data.from_id,
+        sdp: pc.localDescription.toJSON(),
         answer: pc.localDescription.toJSON(),
       });
     } catch (error) {

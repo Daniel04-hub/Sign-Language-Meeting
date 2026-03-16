@@ -322,7 +322,7 @@ class SignMeetConsumer(AsyncWebsocketConsumer):
             }
         """
         target_id = data.get("target_id", "")
-        sdp = data.get("sdp")
+        sdp = data.get("sdp") or data.get("offer")
 
         if not target_id or sdp is None:
             await self.send_error("webrtc-offer requires target_id and sdp.")
@@ -346,7 +346,7 @@ class SignMeetConsumer(AsyncWebsocketConsumer):
             }
         """
         target_id = data.get("target_id", "")
-        sdp = data.get("sdp")
+        sdp = data.get("sdp") or data.get("answer")
 
         if not target_id or sdp is None:
             await self.send_error("webrtc-answer requires target_id and sdp.")
