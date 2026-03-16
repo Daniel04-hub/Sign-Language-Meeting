@@ -54,6 +54,8 @@ export function useSignDetection(localVideoRef, sendMessage, userId, userName) {
   const handsRef       = useRef(null);   // MediaPipe Hands instance
   const canvasRef      = useRef(null);   // hidden capture canvas
   const modelRef       = useRef(null);   // loaded tf.LayersModel
+  const scalerRef      = useRef(null);   // { mean: number[], scale: number[] }
+  const labelEncoderRef = useRef(null);  // { "0": "BYE", ... }
   const isRunningRef   = useRef(false);  // capture loop alive flag
   const animFrameRef   = useRef(null);   // requestAnimationFrame id
   const mockIntervalId = useRef(null);   // setInterval id for mock mode
@@ -130,6 +132,73 @@ export function useSignDetection(localVideoRef, sendMessage, userId, userName) {
   }, []);
 
   /* ──────────────────────────────────────────────────────────────────────
+   * loadScaler
+   *
+   * Loads StandardScaler parameters exported by train.py from /model/scaler.json
+   * and stores them in scalerRef for client-side feature normalization.
+   * ──────────────────────────────────────────────────────────────────── */
+  const loadScaler = useCallback(async () => {
+    const response = await fetch('/model/scaler.json', { cache: 'no-cache' });
+    if (!response.ok) {
+      throw new Error(`Failed to load scaler.json (${response.status})`);
+    }
+
+    const payload = await response.json();
+    const mean = Array.isArray(payload?.mean) ? payload.mean : null;
+    const scale = Array.isArray(payload?.scale) ? payload.scale : null;
+
+    if (!mean || !scale || mean.length !== 63 || scale.length !== 63) {
+      throw new Error('Invalid scaler.json format');
+    }
+
+    scalerRef.current = { mean, scale };
+    console.log('[SignDetect] Scaler loaded successfully');
+  }, []);
+
+  /* ──────────────────────────────────────────────────────────────────────
+   * loadLabelEncoder
+   *
+   * Loads model-output index mapping from /model/label_encoder.json
+   * so frontend sign names always match training-time label encoding.
+   * ──────────────────────────────────────────────────────────────────── */
+  const loadLabelEncoder = useCallback(async () => {
+    const response = await fetch('/model/label_encoder.json', { cache: 'no-cache' });
+    if (!response.ok) {
+      throw new Error(`Failed to load label_encoder.json (${response.status})`);
+    }
+
+    const payload = await response.json();
+    const mapping = payload?.mapping;
+
+    if (!mapping || typeof mapping !== 'object') {
+      throw new Error('Invalid label_encoder.json format');
+    }
+
+    labelEncoderRef.current = mapping;
+    console.log('[SignDetect] Label encoder loaded successfully');
+  }, []);
+
+  /* ──────────────────────────────────────────────────────────────────────
+   * applyScaler
+   *
+   * Applies (x - mean) / scale normalization to a 63-feature vector.
+   * If scaler data is unavailable, returns the original vector.
+   * ──────────────────────────────────────────────────────────────────── */
+  const applyScaler = useCallback((landmarks63) => {
+    const scaler = scalerRef.current;
+    if (!scaler || !Array.isArray(scaler.mean) || !Array.isArray(scaler.scale)) {
+      return landmarks63;
+    }
+
+    const normalized = new Float32Array(63);
+    for (let i = 0; i < 63; i++) {
+      const denominator = scaler.scale[i] === 0 ? 1 : scaler.scale[i];
+      normalized[i] = (landmarks63[i] - scaler.mean[i]) / denominator;
+    }
+    return normalized;
+  }, []);
+
+  /* ──────────────────────────────────────────────────────────────────────
    * predictSign
    *
    * Runs the TF.js model on the 63-value landmark vector and calls
@@ -143,12 +212,14 @@ export function useSignDetection(localVideoRef, sendMessage, userId, userName) {
 
     try {
       const result = tf.tidy(() => {
-        const tensor      = tf.tensor2d([Array.from(landmarks63)], [1, 63]);
+        const scaledLandmarks = applyScaler(landmarks63);
+        const tensor      = tf.tensor2d([Array.from(scaledLandmarks)], [1, 63]);
         const prediction  = modelRef.current.predict(tensor);
         const probs       = prediction.dataSync();
         const maxIndex    = probs.indexOf(Math.max(...probs));
         const confidence  = probs[maxIndex];
-        return { sign: SIGN_LABELS[maxIndex], confidence };
+        const mappedSign = labelEncoderRef.current?.[maxIndex.toString()];
+        return { sign: mappedSign || SIGN_LABELS[maxIndex], confidence };
       });
 
       if (result && result.confidence >= CONFIDENCE_THRESHOLD) {
@@ -157,7 +228,7 @@ export function useSignDetection(localVideoRef, sendMessage, userId, userName) {
     } catch (err) {
       console.error('[SignDetect] Prediction error:', err);
     }
-  }, [onSignDetected]);
+  }, [onSignDetected, applyScaler]);
 
   /* ──────────────────────────────────────────────────────────────────────
    * processHandResults
@@ -195,6 +266,9 @@ export function useSignDetection(localVideoRef, sendMessage, userId, userName) {
     try {
       const model = await tf.loadLayersModel('/model/model.json');
 
+      await loadScaler();
+      await loadLabelEncoder();
+
       // Warm-up pass — avoids first-inference latency spike in the call.
       tf.tidy(() => {
         const dummy = tf.zeros([1, 63]);
@@ -212,7 +286,7 @@ export function useSignDetection(localVideoRef, sendMessage, userId, userName) {
       setMockMode(true);
       setIsModelLoaded(true);  // treat mock as "ready"
     }
-  }, []);
+  }, [loadScaler, loadLabelEncoder]);
 
   /* ──────────────────────────────────────────────────────────────────────
    * initMediaPipe
