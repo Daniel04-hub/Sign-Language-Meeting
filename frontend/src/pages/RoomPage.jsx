@@ -35,32 +35,19 @@ import SpeechModeIndicator from '../components/SpeechModeIndicator';
 import PermissionErrorModal from '../components/PermissionErrorModal';
 import Toast from '../components/Toast';
 import TTSControls from '../components/TTSControls';
+import ParticipantSidebar from '../components/ParticipantSidebar';
+import WaitingState from '../components/WaitingState';
 import {
   setTTSVolume,
   setTTSEnabled,
   speakWithPriority,
 } from '../utils/tts';
 
-// ─── elapsed-time hook ────────────────────────────────────────────────────────
-
-/** Returns a string "MM:SS" counting up from the moment the hook first runs. */
-function useElapsedTime() {
-  const [elapsed, setElapsed] = useState(0);
-  useEffect(() => {
-    const id = setInterval(() => setElapsed(s => s + 1), 1000);
-    return () => clearInterval(id);
-  }, []);
-  const mm = String(Math.floor(elapsed / 60)).padStart(2, '0');
-  const ss = String(elapsed % 60).padStart(2, '0');
-  return `${mm}:${ss}`;
-}
-
 // ─── RoomPage ─────────────────────────────────────────────────────────────────
 
 function RoomPage() {
   const { roomCode } = useParams();
   const navigate = useNavigate();
-  const timer = useElapsedTime();
 
   // ── session identity (set by HomePage before navigating here) ───────
   const userId = sessionStorage.getItem('userId') ?? '';
@@ -83,6 +70,9 @@ function RoomPage() {
   const [ttsEnabled, setTTSEnabledState] = useState(true);
   const [ttsVolume, setTTSVolumeState] = useState(1.0);
   const [showShortcutsModal, setShowShortcutsModal] = useState(false);
+  const [isSidebarOpen, setIsSidebarOpen] = useState(false);
+  const [codeCopied, setCodeCopied] = useState(false);
+  const [timerDisplay, setTimerDisplay] = useState('00:00:00');
 
   const showToast = useCallback((message, type = 'info') => {
     setToast({ show: true, message, type });
@@ -257,6 +247,22 @@ function RoomPage() {
     }
   }, []);
 
+  useEffect(() => {
+    const startTime = Date.now();
+    const timer = setInterval(() => {
+      const elapsed = Math.floor((Date.now() - startTime) / 1000);
+      const hours = Math.floor(elapsed / 3600);
+      const minutes = Math.floor((elapsed % 3600) / 60);
+      const seconds = elapsed % 60;
+      setTimerDisplay(
+        [hours, minutes, seconds]
+          .map(n => String(n).padStart(2, '0'))
+          .join(':'),
+      );
+    }, 1000);
+    return () => clearInterval(timer);
+  }, []);
+
   // ── media initialisation ──────────────────────────────────────────────
   useEffect(() => {
     let cancelled = false;
@@ -298,6 +304,21 @@ function RoomPage() {
 
     startListening();
   }, [isListening, isSignModeOn, startListening, stopListening, showToast]);
+
+  /**
+   * Copies room code to clipboard and shows feedback.
+   * @returns {Promise<void>}
+   */
+  const handleCopyRoomCode = useCallback(async () => {
+    try {
+      await navigator.clipboard.writeText(roomCode);
+      setCodeCopied(true);
+      setTimeout(() => setCodeCopied(false), 2000);
+      showToast('Room code copied to clipboard');
+    } catch {
+      showToast('Could not copy to clipboard', 'error');
+    }
+  }, [roomCode, showToast]);
 
   /**
    * Toggles global TTS enable/disable state.
@@ -364,6 +385,20 @@ function RoomPage() {
 
   const showTTSControls = isSignModeOn || Object.keys(signDetections).length > 0;
 
+  const sidebarParticipants = participants.map((participant) => ({
+    userId: participant.userId,
+    userName: participant.userName,
+    isMuted: participant.isLocal ? !isMicOn : Boolean(participant.isMuted),
+    isCameraOff: participant.isLocal ? !isCameraOn : Boolean(participant.isCameraOff),
+    isSigning: Boolean(signDetections[participant.userId]) || Boolean(participant.isSigning),
+    isSpeaking: caption?.fromName === participant.userName && caption?.isFinal === false,
+    quality: participant.quality ?? 'unknown',
+  }));
+
+  const participantCountText = participants.length === 1
+    ? '1 person'
+    : `${participants.length} people`;
+
   // ─────────────────────────────────────────────────────────────────────
   //  Render
   // ─────────────────────────────────────────────────────────────────────
@@ -388,75 +423,39 @@ function RoomPage() {
       </a>
 
       {/* ── top navbar ────────────────────────────────────────────── */}
-      <nav
-        className="navbar navbar-dark"
-        style={{
-          background:    'var(--bg-secondary)',
-          padding:       '0 16px',
-          height:        56,
-          flexShrink:    0,
-          borderBottom:  '1px solid var(--border-color)',
-        }}
-      >
-        {/* Logo */}
-        <span className="navbar-brand mb-0 fw-bold" style={{ fontSize: 20 }}>
-          🤟 SignMeet
-        </span>
+      <nav className="room-navbar" role="navigation" aria-label="Room navigation">
+        <div className="app-logo">Sign Language Meeting</div>
 
-        {/* Room code pill */}
-        <div className="d-flex align-items-center gap-3">
-          <span
-            className="badge"
-            style={{
-              background:   'var(--bg-tertiary)',
-              color:        'var(--text-primary)',
-              fontFamily:   'monospace',
-              fontSize:     14,
-              letterSpacing: 2,
-              padding:      '6px 12px',
-              borderRadius: 20,
-            }}
-            title="Share this code with others"
+        <div className="room-info">
+          <button
+            type="button"
+            className={`room-code-pill ${codeCopied ? 'copied' : ''}`}
+            onClick={handleCopyRoomCode}
+            title="Click to copy room code"
           >
-            {roomCode}
-          </span>
-
-          {/* Connection status dot */}
-          <span
-            title={isConnected ? 'Connected' : 'Disconnected'}
-            style={{
-              width:        10,
-              height:       10,
-              borderRadius: '50%',
-              background:   isConnected ? '#22C55E' : '#EF4444',
-              display:      'inline-block',
-              flexShrink:   0,
-            }}
-          />
+            {codeCopied ? 'Copied!' : roomCode}
+          </button>
+          <span className="meeting-timer">{timerDisplay}</span>
         </div>
 
-        {/* Right: participant count + timer */}
-        <div
-          style={{
-            color:    'var(--text-secondary)',
-            fontSize: 13,
-            display:  'flex',
-            gap:      16,
-            alignItems: 'center',
-          }}
-        >
-          <span>👥 {participants.length}</span>
-          <span
-            style={{
-              fontVariantNumeric: 'tabular-nums',
-              fontFamily: 'monospace',
-              fontSize:   14,
-            }}
+        <div className="d-flex align-items-center gap-2">
+          <button
+            type="button"
+            className="btn btn-sm btn-outline-light"
+            onClick={() => setIsSidebarOpen(prev => !prev)}
           >
-            ⏱ {timer}
-          </span>
+            {participantCountText}
+          </button>
 
-          {/* Reconnect button (only when disconnected) */}
+          {isSignModeOn && (
+            <span
+              className="badge"
+              style={{ background: isModelLoaded ? 'var(--accent-green)' : 'var(--accent-yellow)', color: isModelLoaded ? 'white' : 'black' }}
+            >
+              {isModelLoaded ? 'AI Ready' : 'Mock Mode'}
+            </span>
+          )}
+
           {!isConnected && (
             <button
               className="btn btn-sm btn-outline-warning py-0"
@@ -487,15 +486,30 @@ function RoomPage() {
         </div>
       )}
 
-      {/* ── video grid (fills remaining space) ───────────────────── */}
+      {/* ── video grid / waiting state ───────────────────────────── */}
       <div id="video-grid" style={{ flex: 1, overflow: 'hidden', padding: '12px 12px 0' }}>
-        <VideoGrid
-          participants={participants}
-          signDetections={signDetections}
-          isMicOn={isMicOn}
-          isCameraOn={isCameraOn}
-        />
+        {participants.length <= 1 ? (
+          <WaitingState
+            roomCode={roomCode}
+            userName={userName}
+            onCopyCode={handleCopyRoomCode}
+          />
+        ) : (
+          <VideoGrid
+            participants={participants}
+            signDetections={signDetections}
+            isMicOn={isMicOn}
+            isCameraOn={isCameraOn}
+          />
+        )}
       </div>
+
+      <ParticipantSidebar
+        participants={sidebarParticipants}
+        isOpen={isSidebarOpen}
+        onClose={() => setIsSidebarOpen(false)}
+        localUserId={userId}
+      />
 
       {/* ── sign detection overlay (fixed top-right HUD) ───────── */}
       <SignDetectionOverlay
@@ -600,6 +614,7 @@ function RoomPage() {
         onToggleCamera={toggleCamera}
         onToggleSpeech={handleToggleSpeech}
         onToggleSign={handleToggleSign}
+        onToggleParticipants={() => setIsSidebarOpen(prev => !prev)}
         onLeave={handleLeave}
         participantCount={participants.length}
       />

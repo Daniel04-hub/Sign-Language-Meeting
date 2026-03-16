@@ -19,14 +19,39 @@
  *   isSpeaking   {boolean}           — true when voice activity is detected
  */
 
-import { useRef, useEffect } from 'react';
+import { useRef, useEffect, useState } from 'react';
 import SignBadge from './SignBadge';
+import ConnectionQuality from './ConnectionQuality';
 
 /** Generate two-character initials from a display name. */
 function getInitials(name = '') {
   const parts = name.trim().split(/\s+/);
   if (parts.length === 1) return parts[0].slice(0, 2).toUpperCase();
   return (parts[0][0] + parts[parts.length - 1][0]).toUpperCase();
+}
+
+/**
+ * Returns a gradient background from a stable username hash.
+ * @param {string} name
+ * @returns {string}
+ */
+function getAvatarColor(name = '') {
+  const palettes = [
+    ['var(--accent-blue)', 'var(--accent-green)'],
+    ['var(--accent-purple)', 'var(--accent-blue)'],
+    ['var(--accent-red)', 'var(--accent-purple)'],
+    ['var(--accent-green)', 'var(--accent-blue)'],
+    ['var(--accent-yellow)', 'var(--accent-red)'],
+  ];
+
+  let hash = 0;
+  for (let i = 0; i < name.length; i++) {
+    hash = ((hash << 5) - hash) + name.charCodeAt(i);
+    hash |= 0;
+  }
+
+  const [start, end] = palettes[Math.abs(hash) % palettes.length];
+  return `linear-gradient(135deg, ${start}, ${end})`;
 }
 
 function VideoTile({
@@ -37,8 +62,11 @@ function VideoTile({
   isCameraOff = false,
   signDetected = null,
   isSpeaking   = false,
+  isSigning    = false,
+  quality      = 'unknown',
 }) {
   const videoRef = useRef(null);
+  const [isEntering, setIsEntering] = useState(true);
 
   /** Wire the stream to the <video> element whenever it changes. */
   useEffect(() => {
@@ -47,17 +75,27 @@ function VideoTile({
     }
   }, [stream]);
 
+  useEffect(() => {
+    const timer = setTimeout(() => setIsEntering(false), 400);
+    return () => clearTimeout(timer);
+  }, []);
+
   // ── speaking border ────────────────────────────────────────────────
-  const speakingStyle = isSpeaking
-    ? { boxShadow: '0 0 0 3px #3B82F6, 0 0 12px 3px rgba(59,130,246,0.45)' }
-    : {};
+  const truncatedName = userName.length > 20 ? `${userName.slice(0, 20)}…` : userName;
+
+  const tileClasses = [
+    'video-tile',
+    isSpeaking ? 'speaking' : '',
+    isSigning ? 'signing' : '',
+    isEntering ? 'video-tile-enter' : '',
+  ].filter(Boolean).join(' ');
 
   return (
     <div
-      className="video-tile"
+      className={tileClasses}
       role="region"
       aria-label={`${userName}'s video feed`}
-      style={{ position: 'relative', ...speakingStyle }}
+      style={{ position: 'relative' }}
     >
 
       {/* ── video element (always rendered; hidden when camera is off) ── */}
@@ -93,7 +131,7 @@ function VideoTile({
               width:          72,
               height:         72,
               borderRadius:   '50%',
-              background:     'var(--accent-purple)',
+              background:     getAvatarColor(userName),
               display:        'flex',
               alignItems:     'center',
               justifyContent: 'center',
@@ -118,38 +156,17 @@ function VideoTile({
         </>
       )}
 
-      {/* ── muted-mic icon overlay ── */}
-      {isMuted && (
-        <span
-          title="Microphone muted"
-          style={{
-            position:  'absolute',
-            bottom:    36,
-            left:      10,
-            fontSize:  18,
-            lineHeight: 1,
-          }}
-        >
-          🔇
-        </span>
-      )}
+      <div style={{ position: 'absolute', top: 8, right: 8 }}>
+        <ConnectionQuality quality={quality} showLabel={false} />
+      </div>
 
-      {/* ── bottom label: name + (You) badge ── */}
+      {/* ── muted-mic icon overlay ── */}
+      {/* ── bottom label: full name + local + muted indicators ── */}
       <div className="tile-label">
-        <span>{userName}</span>
-        {isLocal && (
-          <span
-            style={{
-              marginLeft:   6,
-              fontSize:     11,
-              padding:      '1px 5px',
-              borderRadius: 4,
-              background:   'rgba(59,130,246,0.6)',
-            }}
-          >
-            You
-          </span>
-        )}
+        <span style={{ whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis', maxWidth: 180, display: 'inline-block', verticalAlign: 'middle' }}>
+          {truncatedName}{isLocal ? ' (You)' : ''}
+        </span>
+        {isMuted && <span style={{ marginLeft: 6, opacity: 0.85, fontSize: 11 }}>🔇</span>}
       </div>
 
     </div>

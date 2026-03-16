@@ -438,3 +438,347 @@ input[type='range'].tts-volume::-moz-range-thumb {
   .control-btn                       { width: 42px; height: 42px; font-size: 16px; }
   .caption-overlay                   { max-width: 95%; bottom: 86px; }
 }
+
+/* ── Batch 5.1 polish additions ─────────────────────────────────────────── */
+
+/* Smooth page transitions */
+.page-enter {
+  opacity: 0;
+  transform: translateY(8px);
+}
+
+.page-enter-active {
+  opacity: 1;
+  transform: translateY(0);
+  transition: opacity 300ms ease, transform 300ms ease;
+}
+
+/* Video tile enhancements */
+.video-tile {
+  transition: transform 0.2s ease, box-shadow 0.2s ease;
+}
+
+.video-tile:hover {
+  transform: scale(1.01);
+  box-shadow: 0 4px 20px rgba(0, 0, 0, 0.4);
+}
+
+.video-tile.speaking {
+  border-color: var(--accent-blue);
+  box-shadow: 0 0 0 2px rgba(10, 132, 255, 0.3);
+}
+
+.video-tile.signing {
+  border-color: var(--accent-purple);
+  box-shadow: 0 0 0 2px rgba(191, 90, 242, 0.3);
+}
+
+/* Speaking pulse animation */
+@keyframes speaking-pulse {
+  0%,
+  100% {
+    box-shadow: 0 0 0 2px rgba(10, 132, 255, 0.3);
+  }
+
+  50% {
+    box-shadow: 0 0 0 4px rgba(10, 132, 255, 0.5);
+  }
+}
+
+.video-tile.speaking {
+  animation: speaking-pulse 1.5s ease infinite;
+}
+
+/* Tile add animation (when new user joins) */
+@keyframes tile-appear {
+  from {
+    opacity: 0;
+    transform: scale(0.85);
+  }
+
+  to {
+    opacity: 1;
+    transform: scale(1);
+  }
+}
+
+.video-tile-enter {
+  animation: tile-appear 0.4s ease forwards;
+}
+
+/* Tile remove animation (when user leaves) */
+@keyframes tile-disappear {
+  from {
+    opacity: 1;
+    transform: scale(1);
+  }
+
+  to {
+    opacity: 0;
+    transform: scale(0.85);
+  }
+}
+
+.video-tile-exit {
+  animation: tile-disappear 0.3s ease forwards;
+}
+
+/* Connection quality indicator */
+.quality-indicator {
+  position: absolute;
+  top: 8px;
+  right: 8px;
+  width: 10px;
+  height: 10px;
+  border-radius: 50%;
+  border: 2px solid rgba(0, 0, 0, 0.3);
+}
+
+.quality-good { background: var(--accent-green); }
+
+.quality-medium { background: var(--accent-yellow); }
+
+.quality-poor { background: var(--accent-red); }
+
+.quality-unknown { background: #48484A; }
+
+/* Top navbar styles */
+.room-navbar {
+  height: 60px;
+  background: var(--bg-secondary);
+  border-bottom: 1px solid var(--border-color);
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 0 20px;
+  position: sticky;
+  top: 0;
+  z-index: 200;
+}
+
+.room-navbar .app-logo {
+  font-size: 18px;
+  font-weight: 700;
+  color: var(--text-primary);
+  letter-spacing: -0.3px;
+}
+
+.room-navbar .room-info {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+
+.room-code-pill {
+  background: var(--bg-tile);
+  border: 1px solid var(--border-color);
+  border-radius: 8px;
+  padding: 4px 12px;
+  font-size: 13px;
+  font-weight: 600;
+  letter-spacing: 2px;
+  color: var(--accent-blue);
+  cursor: pointer;
+  font-family: 'Courier New', monospace;
+  transition: background 0.2s ease;
+}
+
+.room-code-pill:hover {
+  background: var(--accent-blue);
+  color: white;
+  border-color: var(--accent-blue);
+}
+
+.room-code-pill.copied {
+  background: var(--accent-green);
+  color: white;
+  border-color: var(--accent-green);
+}
+
+.meeting-timer {
+  font-size: 13px;
+  color: var(--text-secondary);
+  font-family: 'Courier New', monospace;
+  min-width: 52px;
+}
+
+/* Participant sidebar styles */
+.participant-sidebar {
+  position: fixed;
+  right: 0;
+  top: 60px;
+  bottom: 80px;
+  width: 240px;
+  background: var(--bg-secondary);
+  border-left: 1px solid var(--border-color);
+  transform: translateX(100%);
+  transition: transform 0.3s ease;
+  z-index: 150;
+  overflow-y: auto;
+  padding: 16px;
+}
+
+.participant-sidebar.open {
+  transform: translateX(0);
+}
+
+.participant-sidebar h6 {
+  color: var(--text-secondary);
+  font-size: 11px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.8px;
+  margin-bottom: 12px;
+}
+
+.participant-item {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 8px 0;
+  border-bottom: 1px solid rgba(72, 72, 74, 0.5);
+}
+
+.participant-avatar {
+  width: 32px;
+  height: 32px;
+  border-radius: 50%;
+  background: var(--bg-tile);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 14px;
+  font-weight: 700;
+  color: var(--text-primary);
+  flex-shrink: 0;
+}
+
+.participant-name {
+  font-size: 14px;
+  color: var(--text-primary);
+  flex: 1;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.participant-status {
+  display: flex;
+  gap: 4px;
+  font-size: 12px;
+}
+
+/* Waiting state styles */
+.waiting-container {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  height: calc(100vh - 140px);
+  gap: 20px;
+  text-align: center;
+  padding: 20px;
+}
+
+.waiting-container h3 {
+  color: var(--text-primary);
+  font-weight: 600;
+}
+
+.waiting-container p {
+  color: var(--text-secondary);
+  max-width: 320px;
+  line-height: 1.6;
+}
+
+.waiting-dots span {
+  display: inline-block;
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: var(--accent-blue);
+  margin: 0 3px;
+  animation: waiting-bounce 1.4s ease infinite;
+}
+
+.waiting-dots span:nth-child(2) {
+  animation-delay: 0.2s;
+}
+
+.waiting-dots span:nth-child(3) {
+  animation-delay: 0.4s;
+}
+
+@keyframes waiting-bounce {
+  0%,
+  80%,
+  100% {
+    transform: scale(0.6);
+    opacity: 0.4;
+  }
+
+  40% {
+    transform: scale(1);
+    opacity: 1;
+  }
+}
+
+/* HomePage polish */
+.home-page {
+  min-height: 100vh;
+  background: var(--bg-primary);
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  padding: 20px;
+}
+
+.home-logo {
+  font-size: 36px;
+  font-weight: 800;
+  color: var(--text-primary);
+  letter-spacing: -1px;
+  margin-bottom: 8px;
+}
+
+.home-tagline {
+  color: var(--text-secondary);
+  font-size: 16px;
+  margin-bottom: 40px;
+  text-align: center;
+}
+
+.home-card {
+  background: var(--bg-card);
+  border: 1px solid var(--border-color);
+  border-radius: 16px;
+  padding: 28px;
+  width: 100%;
+}
+
+.home-card-title {
+  font-size: 16px;
+  font-weight: 700;
+  color: var(--text-primary);
+  margin-bottom: 20px;
+  padding-bottom: 12px;
+  border-bottom: 1px solid var(--border-color);
+}
+
+.divider-with-text {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  margin: 24px 0;
+  color: var(--text-secondary);
+  font-size: 13px;
+}
+
+.divider-with-text::before,
+.divider-with-text::after {
+  content: '';
+  flex: 1;
+  height: 1px;
+  background: var(--border-color);
+}

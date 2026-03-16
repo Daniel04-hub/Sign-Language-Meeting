@@ -5,7 +5,7 @@
  * Stores userName + userId in sessionStorage so RoomPage can read them.
  */
 
-import { useState } from 'react';
+import { useState, useEffect } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { v4 as uuidv4 } from 'uuid';
 import axios from 'axios';
@@ -26,6 +26,12 @@ function HomePage() {
   const [joinName,     setJoinName]     = useState('');
   const [joinCode,     setJoinCode]     = useState('');
   const [isJoining,    setIsJoining]    = useState(false);
+  const [isPageVisible, setIsPageVisible] = useState(false);
+
+  useEffect(() => {
+    const timer = setTimeout(() => setIsPageVisible(true), 10);
+    return () => clearTimeout(timer);
+  }, []);
 
   // ── helpers ───────────────────────────────────────────────────
   function saveSession(userName, roomCode) {
@@ -87,17 +93,22 @@ function HomePage() {
 
   // ── render ────────────────────────────────────────────────────
   return (
-    <div className="home-page">
+    <div className={`home-page ${isPageVisible ? 'page-enter-active' : 'page-enter'}`}>
       <div className="container-fluid" style={{ maxWidth: 960 }}>
 
         {/* ── header ── */}
         <div className="text-center mb-5">
-          <h1 className="display-4 fw-bold mb-2" style={{ color: 'var(--text-primary)' }}>
-            🤟 SignMeet
+          <h1 className="home-logo mb-2">
+            Sign Language Meeting
           </h1>
-          <p className="lead" style={{ color: 'var(--text-secondary)' }}>
+          <p className="home-tagline">
             Real-time video calls with bidirectional sign language translation
           </p>
+          <div className="d-flex flex-wrap justify-content-center gap-2 mt-2">
+            <span className="badge" style={{ background: 'var(--accent-purple)', color: 'white', padding: '6px 10px' }}>Sign Language AI</span>
+            <span className="badge" style={{ background: 'var(--accent-blue)', color: 'white', padding: '6px 10px' }}>Live Captions</span>
+            <span className="badge" style={{ background: 'var(--accent-green)', color: 'white', padding: '6px 10px' }}>Free Forever</span>
+          </div>
         </div>
 
         {/* ── global error ── */}
@@ -108,13 +119,13 @@ function HomePage() {
         )}
 
         {/* ── two-column cards ── */}
-        <div className="row g-4">
+        <div className="row g-4 align-items-stretch position-relative">
 
           {/* ── create card ── */}
-          <div className="col-12 col-md-6">
+          <div className="col-12 col-md-6 pe-md-4">
             <div className="card h-100">
-              <div className="card-body p-4">
-                <h2 className="card-title mb-1" style={{ fontSize: 22 }}>
+              <div className="card-body p-4 home-card">
+                <h2 className="home-card-title">
                   Create a Meeting
                 </h2>
                 <p className="card-text mb-4" style={{ color: 'var(--text-secondary)', fontSize: 14 }}>
@@ -130,11 +141,12 @@ function HomePage() {
                       id="create-name"
                       type="text"
                       className="form-control"
-                      placeholder="e.g. Alice"
+                      placeholder="Enter your name as others should see it"
                       maxLength={50}
                       value={createName}
                       onChange={e => setCreateName(e.target.value)}
                       disabled={isCreating}
+                      style={{ transition: 'border-color 0.2s ease, box-shadow 0.2s ease' }}
                     />
                   </div>
 
@@ -146,11 +158,12 @@ function HomePage() {
                       id="room-name"
                       type="text"
                       className="form-control"
-                      placeholder="e.g. Team standup"
+                      placeholder="Name this meeting (for your reference)"
                       maxLength={50}
                       value={roomName}
                       onChange={e => setRoomName(e.target.value)}
                       disabled={isCreating}
+                      style={{ transition: 'border-color 0.2s ease, box-shadow 0.2s ease' }}
                     />
                   </div>
 
@@ -158,6 +171,15 @@ function HomePage() {
                     type="submit"
                     className="btn btn-primary w-100"
                     disabled={isCreating}
+                    style={{ transition: 'all 0.2s ease' }}
+                    onMouseEnter={(e) => {
+                      e.currentTarget.style.transform = 'translateY(-1px)';
+                      e.currentTarget.style.boxShadow = '0 4px 12px rgba(0,0,0,0.3)';
+                    }}
+                    onMouseLeave={(e) => {
+                      e.currentTarget.style.transform = 'translateY(0)';
+                      e.currentTarget.style.boxShadow = 'none';
+                    }}
                   >
                     {isCreating
                       ? <LoadingSpinner size="sm" color="text-white" message="" />
@@ -169,10 +191,15 @@ function HomePage() {
           </div>
 
           {/* ── join card ── */}
-          <div className="col-12 col-md-6">
+          <div className="d-none d-md-block" style={{ position: 'absolute', left: '50%', top: 20, bottom: 20, width: 1, background: 'var(--border-color)' }} />
+          <div className="col-12 d-md-none">
+            <div className="divider-with-text">or</div>
+          </div>
+
+          <div className="col-12 col-md-6 ps-md-4">
             <div className="card h-100">
-              <div className="card-body p-4">
-                <h2 className="card-title mb-1" style={{ fontSize: 22 }}>
+              <div className="card-body p-4 home-card">
+                <h2 className="home-card-title">
                   Join a Meeting
                 </h2>
                 <p className="card-text mb-4" style={{ color: 'var(--text-secondary)', fontSize: 14 }}>
@@ -188,11 +215,12 @@ function HomePage() {
                       id="join-name"
                       type="text"
                       className="form-control"
-                      placeholder="e.g. Bob"
+                      placeholder="Type your display name"
                       maxLength={50}
                       value={joinName}
                       onChange={e => setJoinName(e.target.value)}
                       disabled={isJoining}
+                      style={{ transition: 'border-color 0.2s ease, box-shadow 0.2s ease' }}
                     />
                   </div>
 
@@ -204,12 +232,19 @@ function HomePage() {
                       id="join-code"
                       type="text"
                       className="form-control"
-                      placeholder="e.g. AB3XY9ZQ"
+                      placeholder="PASTE ROOM CODE"
                       maxLength={8}
                       value={joinCode}
                       onChange={e => setJoinCode(e.target.value.toUpperCase())}
                       disabled={isJoining}
-                      style={{ letterSpacing: 3, fontFamily: 'monospace', textTransform: 'uppercase' }}
+                      style={{
+                        letterSpacing: 3,
+                        fontFamily: 'monospace',
+                        textTransform: 'uppercase',
+                        textAlign: 'center',
+                        fontSize: 18,
+                        transition: 'border-color 0.2s ease, box-shadow 0.2s ease',
+                      }}
                     />
                   </div>
 
@@ -217,6 +252,15 @@ function HomePage() {
                     type="submit"
                     className="btn btn-success w-100"
                     disabled={isJoining}
+                    style={{ transition: 'all 0.2s ease' }}
+                    onMouseEnter={(e) => {
+                      e.currentTarget.style.transform = 'translateY(-1px)';
+                      e.currentTarget.style.boxShadow = '0 4px 12px rgba(0,0,0,0.3)';
+                    }}
+                    onMouseLeave={(e) => {
+                      e.currentTarget.style.transform = 'translateY(0)';
+                      e.currentTarget.style.boxShadow = 'none';
+                    }}
                   >
                     {isJoining
                       ? <LoadingSpinner size="sm" color="text-white" message="" />
@@ -228,6 +272,21 @@ function HomePage() {
           </div>
 
         </div>{/* row */}
+
+        <div className="row mt-4 text-center">
+          <div className="col-4">
+            <div style={{ fontSize: 16 }}>🔗</div>
+            <div style={{ fontSize: 12, color: 'var(--text-secondary)' }}>P2P Video</div>
+          </div>
+          <div className="col-4">
+            <div style={{ fontSize: 16 }}>🔒</div>
+            <div style={{ fontSize: 12, color: 'var(--text-secondary)' }}>No Recording</div>
+          </div>
+          <div className="col-4">
+            <div style={{ fontSize: 16 }}>👥</div>
+            <div style={{ fontSize: 12, color: 'var(--text-secondary)' }}>Up to 8 Users</div>
+          </div>
+        </div>
 
         {/* ── footer note ── */}
         <p className="text-center mt-5" style={{ color: 'var(--text-secondary)', fontSize: 13 }}>

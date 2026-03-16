@@ -31,6 +31,7 @@ function ControlsBar({
   onToggleCamera,
   onToggleSpeech,
   onToggleSign,
+  onToggleParticipants,
   onLeave,
   participantCount = 1,
 }) {
@@ -150,7 +151,38 @@ function ControlsBar({
       </div>
 
       {/* ── right: leave button ── */}
-      <div className="d-flex align-items-center">
+      <div className="d-flex align-items-center gap-2">
+        <button
+          style={{
+            ...base,
+            background: 'var(--bg-tertiary)',
+            color: '#fff',
+            width: 'auto',
+            borderRadius: 24,
+            padding: '0 14px',
+            fontSize: 13,
+            fontWeight: 600,
+            position: 'relative',
+          }}
+          title="Show participants"
+          onClick={onToggleParticipants}
+          aria-label="Toggle participant sidebar"
+        >
+          People
+          <span
+            style={{
+              marginLeft: 8,
+              background: 'var(--accent-blue)',
+              borderRadius: 10,
+              padding: '1px 6px',
+              fontSize: 11,
+              lineHeight: 1.4,
+            }}
+          >
+            {participantCount}
+          </span>
+        </button>
+
         <button
           style={{ ...base, background: '#EF4444', color: '#fff', width: 'auto', borderRadius: 24, padding: '0 20px', fontSize: 14, fontWeight: 600 }}
           title="Leave meeting"

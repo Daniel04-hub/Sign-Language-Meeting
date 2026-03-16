@@ -36,7 +36,9 @@ function VideoGrid({
           isMuted={participant.isLocal ? !isMicOn    : false}
           isCameraOff={participant.isLocal ? !isCameraOn : false}
           signDetected={signDetections[participant.userId] ?? null}
-          isSpeaking={false}   /* voice-activity detection added in Batch 3 */
+          isSpeaking={Boolean(participant.isSpeaking)}
+          isSigning={Boolean(signDetections[participant.userId]) || Boolean(participant.isSigning)}
+          quality={participant.quality ?? 'unknown'}
         />
       ))}
 
