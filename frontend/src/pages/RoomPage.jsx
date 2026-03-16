@@ -34,6 +34,12 @@ import HandLandmarkCanvas from '../components/HandLandmarkCanvas';
 import SpeechModeIndicator from '../components/SpeechModeIndicator';
 import PermissionErrorModal from '../components/PermissionErrorModal';
 import Toast from '../components/Toast';
+import TTSControls from '../components/TTSControls';
+import {
+  setTTSVolume,
+  setTTSEnabled,
+  speakWithPriority,
+} from '../utils/tts';
 
 // ─── elapsed-time hook ────────────────────────────────────────────────────────
 
@@ -74,10 +80,21 @@ function RoomPage() {
   const [showPermissionModal, setShowPermissionModal] = useState(false);
   const [permissionType, setPermissionType] = useState('microphone');
   const [toast, setToast] = useState({ show: false, message: '', type: 'info' });
+  const [ttsEnabled, setTTSEnabledState] = useState(true);
+  const [ttsVolume, setTTSVolumeState] = useState(1.0);
+  const [showShortcutsModal, setShowShortcutsModal] = useState(false);
 
   const showToast = useCallback((message, type = 'info') => {
     setToast({ show: true, message, type });
   }, []);
+
+  const signSpeechMap = {
+    HELLO: 'Hello there',
+    THANKS: 'Thank you',
+    BYE: 'Goodbye',
+    YES: 'Yes',
+    NO: 'No',
+  };
 
   // ── WebRTC hook ─────────────────────────────────────────────────────
   // sendMessage is provided later (by useWebSocket). We forward a stable
@@ -116,15 +133,17 @@ function RoomPage() {
       case 'sign-detected': {
         const fromId   = message.from_id ?? message.user_id;
         const signText = message.sign;
+        const confidence = Number(message.confidence ?? 0);
 
         setSignDetections(prev => ({ ...prev, [fromId]: signText }));
 
-        // Optionally speak the sign for participants who aren't the sender.
-        if (fromId !== userId && 'speechSynthesis' in window) {
-          const utter = new SpeechSynthesisUtterance(signText);
-          utter.rate   = 1.1;
-          utter.volume = 0.8;
-          window.speechSynthesis.speak(utter);
+        console.log(
+          `SignMeet: Sign detected: ${signText} confidence: ${(confidence * 100).toFixed(1)}%`,
+        );
+
+        if (fromId !== userId) {
+          const phrase = signSpeechMap[signText] ?? signText;
+          speakWithPriority(phrase, 'normal');
         }
 
         // Auto-clear the badge after 2.5 s.
@@ -205,6 +224,39 @@ function RoomPage() {
     }
   }, [permissionDenied]);
 
+  useEffect(() => {
+    setTTSEnabled(ttsEnabled);
+  }, [ttsEnabled]);
+
+  useEffect(() => {
+    setTTSVolume(ttsVolume);
+  }, [ttsVolume]);
+
+  useEffect(() => {
+    try {
+      const mediaQuery = window.matchMedia('(prefers-contrast: high)');
+
+      const updateContrastClass = () => {
+        if (mediaQuery.matches) {
+          document.body.classList.add('high-contrast-captions');
+        } else {
+          document.body.classList.remove('high-contrast-captions');
+        }
+      };
+
+      updateContrastClass();
+      mediaQuery.addEventListener('change', updateContrastClass);
+
+      return () => {
+        mediaQuery.removeEventListener('change', updateContrastClass);
+        document.body.classList.remove('high-contrast-captions');
+      };
+    } catch (error) {
+      console.warn('RoomPage: high contrast detection failed:', error);
+      return () => {};
+    }
+  }, []);
+
   // ── media initialisation ──────────────────────────────────────────────
   useEffect(() => {
     let cancelled = false;
@@ -247,6 +299,71 @@ function RoomPage() {
     startListening();
   }, [isListening, isSignModeOn, startListening, stopListening, showToast]);
 
+  /**
+   * Toggles global TTS enable/disable state.
+   * @returns {void}
+   */
+  const handleToggleTTS = useCallback(() => {
+    const newValue = !ttsEnabled;
+    setTTSEnabledState(newValue);
+    setTTSEnabled(newValue);
+  }, [ttsEnabled]);
+
+  /**
+   * Applies the selected TTS volume.
+   * @param {number} newVolume
+   * @returns {void}
+   */
+  const handleVolumeChange = useCallback((newVolume) => {
+    setTTSVolumeState(newVolume);
+    setTTSVolume(newVolume);
+  }, []);
+
+  useEffect(() => {
+    /**
+     * Handles global keyboard shortcuts.
+     * @param {KeyboardEvent} event
+     * @returns {void}
+     */
+    const handleKeyDown = (event) => {
+      try {
+        if (!event.altKey) return;
+
+        const key = event.key.toLowerCase();
+        if (key === 'm') {
+          event.preventDefault();
+          toggleMic();
+          showToast('Shortcut: Toggled mic');
+        } else if (key === 'c') {
+          event.preventDefault();
+          toggleCamera();
+          showToast('Shortcut: Toggled camera');
+        } else if (key === 's') {
+          event.preventDefault();
+          handleToggleSign();
+          showToast('Shortcut: Toggled sign mode');
+        } else if (key === 't') {
+          event.preventDefault();
+          handleToggleSpeech();
+          showToast('Shortcut: Toggled captions');
+        } else if (key === 'l') {
+          event.preventDefault();
+          showToast('Shortcut: Leaving room', 'warning');
+          setTimeout(() => handleLeave(), 200);
+        }
+      } catch (error) {
+        console.warn('RoomPage: keyboard shortcut failed:', error);
+      }
+    };
+
+    document.addEventListener('keydown', handleKeyDown);
+    return () => {
+      document.removeEventListener('keydown', handleKeyDown);
+    };
+  }, [toggleMic, toggleCamera, handleToggleSign, handleToggleSpeech, handleLeave, showToast]);
+
+  const showTTSControls = isSignModeOn || Object.keys(signDetections).length > 0;
+
   // ─────────────────────────────────────────────────────────────────────
   //  Render
   // ─────────────────────────────────────────────────────────────────────
@@ -262,6 +379,14 @@ function RoomPage() {
         overflow:      'hidden',
       }}
     >
+      <a
+        href="#video-grid"
+        className="visually-hidden-focusable"
+        style={{ position: 'absolute', top: 8, left: 8, zIndex: 1500 }}
+      >
+        Skip to video grid
+      </a>
+
       {/* ── top navbar ────────────────────────────────────────────── */}
       <nav
         className="navbar navbar-dark"
@@ -341,6 +466,17 @@ function RoomPage() {
               Reconnect
             </button>
           )}
+
+          <button
+            type="button"
+            className="btn btn-sm btn-outline-light py-0"
+            style={{ width: 24, height: 24, lineHeight: '18px', padding: 0 }}
+            onClick={() => setShowShortcutsModal(true)}
+            aria-label="Show keyboard shortcuts"
+            title="Keyboard shortcuts"
+          >
+            ?
+          </button>
         </div>
       </nav>
 
@@ -352,7 +488,7 @@ function RoomPage() {
       )}
 
       {/* ── video grid (fills remaining space) ───────────────────── */}
-      <div style={{ flex: 1, overflow: 'hidden', padding: '12px 12px 0' }}>
+      <div id="video-grid" style={{ flex: 1, overflow: 'hidden', padding: '12px 12px 0' }}>
         <VideoGrid
           participants={participants}
           signDetections={signDetections}
@@ -402,6 +538,56 @@ function RoomPage() {
         type={toast.type}
         onHide={() => setToast({ show: false, message: '', type: 'info' })}
       />
+
+      {showTTSControls && (
+        <TTSControls
+          ttsEnabled={ttsEnabled}
+          ttsVolume={ttsVolume}
+          onToggleTTS={handleToggleTTS}
+          onVolumeChange={handleVolumeChange}
+        />
+      )}
+
+      {showShortcutsModal && (
+        <div
+          className="modal fade show"
+          tabIndex="-1"
+          role="dialog"
+          style={{ display: 'block', backgroundColor: 'rgba(0, 0, 0, 0.6)' }}
+          aria-modal="true"
+        >
+          <div className="modal-dialog modal-dialog-centered" role="document">
+            <div className="modal-content" style={{ background: 'var(--bg-secondary)', color: 'var(--text-primary)', border: '1px solid var(--border-color)' }}>
+              <div className="modal-header" style={{ borderBottom: '1px solid var(--border-color)' }}>
+                <h5 className="modal-title">Keyboard Shortcuts</h5>
+                <button
+                  type="button"
+                  className="btn-close btn-close-white"
+                  aria-label="Close"
+                  onClick={() => setShowShortcutsModal(false)}
+                />
+              </div>
+              <div className="modal-body">
+                <table className="table table-dark table-striped table-sm mb-0">
+                  <thead>
+                    <tr>
+                      <th>Shortcut</th>
+                      <th>Action</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    <tr><td>Alt + M</td><td>Toggle mic</td></tr>
+                    <tr><td>Alt + C</td><td>Toggle camera</td></tr>
+                    <tr><td>Alt + S</td><td>Toggle signing</td></tr>
+                    <tr><td>Alt + T</td><td>Toggle captions</td></tr>
+                    <tr><td>Alt + L</td><td>Leave room</td></tr>
+                  </tbody>
+                </table>
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
 
       {/* ── controls bar (fixed bottom) ───────────────────────────── */}
       <ControlsBar

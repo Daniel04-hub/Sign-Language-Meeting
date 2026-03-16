@@ -55,6 +55,8 @@ function VideoTile({
   return (
     <div
       className="video-tile"
+      role="region"
+      aria-label={`${userName}'s video feed`}
       style={{ position: 'relative', ...speakingStyle }}
     >
 
@@ -64,6 +66,7 @@ function VideoTile({
         autoPlay
         playsInline
         muted={isLocal}          // avoid echo for local stream
+        aria-label={isLocal ? 'Your video' : `${userName}'s video`}
         style={{
           width:      '100%',
           height:     '100%',
@@ -106,7 +109,14 @@ function VideoTile({
       )}
 
       {/* ── sign badge (top-right) ── */}
-      {signDetected && <SignBadge sign={signDetected} />}
+      {signDetected && (
+        <>
+          <SignBadge sign={signDetected} />
+          <span className="visually-hidden">
+            {userName} is signing {signDetected}
+          </span>
+        </>
+      )}
 
       {/* ── muted-mic icon overlay ── */}
       {isMuted && (

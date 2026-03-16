@@ -40,6 +40,30 @@ Train AI Model (optional):
 	pip install -r requirements.txt
 	python train.py
 
+## How It Works
+
+### Deaf User Signs Flow
+1. Deaf user enables Sign Mode
+2. MediaPipe captures hand from camera at 10fps
+3. 21 landmarks extracted (63 float values)
+4. StandardScaler normalizes the values
+5. TF.js MLP model predicts sign + confidence
+6. If confidence above 85 percent: sign detected
+7. WebSocket sends sign-detected to Django
+8. Django Channels broadcasts to all room members
+9. Hearing users hear TTS: "Hello there"
+10. All users see green badge on deaf user video tile
+
+### Hearing User Speaks Flow
+1. Hearing user enables Captions (CC button)
+2. Web Speech API captures microphone audio
+3. Interim text sent via WebSocket as user speaks
+4. Final text sent when user pauses
+5. Django Channels broadcasts to all room members
+6. Deaf user sees large 28px caption overlay
+7. Caption shows: "Alice: Hello, can you hear me?"
+8. Caption auto-clears after 6 seconds
+
 ## Build Progress
 
 | Phase | Status      | Description                     |

@@ -61,6 +61,7 @@ class SignMeetConsumer(AsyncWebsocketConsumer):
     # ── Class-level in-process room registry ─────────────────────────────────
     # { room_code: { user_id: { "name": str, "channel_name": str } } }
     rooms: dict = {}
+    VALID_SIGNS = {'HELLO', 'THANKS', 'BYE', 'YES', 'NO'}
 
     # ─────────────────────────────────────────────────────────────────────────
     # Lifecycle
@@ -87,6 +88,7 @@ class SignMeetConsumer(AsyncWebsocketConsumer):
         self.user_id: str = ""
         self.user_name: str = ""
         self.last_speech_time: float = 0.0
+        self.sign_count: int = 0
 
         # Fetch room from DB
         room = await self._get_room(self.room_code)
@@ -363,12 +365,28 @@ class SignMeetConsumer(AsyncWebsocketConsumer):
                 confidence: float — 0.0–1.0, only sent if > 0.85 by client.
             }
         """
-        sign = data.get("sign", "")
-        confidence = data.get("confidence", 0.0)
+        raw_sign = data.get("sign", "")
+        sign = str(raw_sign).strip().upper()
 
         if not sign:
             await self._send_error("sign-detected requires sign field.")
             return
+
+        if sign not in self.VALID_SIGNS:
+            await self._send_error("Invalid sign label.")
+            return
+
+        try:
+            confidence = float(data.get("confidence", 0.0))
+        except (TypeError, ValueError):
+            await self._send_error("Invalid confidence value.")
+            return
+
+        if confidence < 0 or confidence > 1:
+            await self._send_error("Confidence must be between 0 and 1.")
+            return
+
+        self.sign_count += 1
 
         await self.channel_layer.group_send(
             self.group_name,
@@ -378,8 +396,10 @@ class SignMeetConsumer(AsyncWebsocketConsumer):
                     "type": "sign-detected",
                     "from_id": self.user_id,
                     "from_name": self.user_name,
-                    "sign": sign.upper(),
+                    "sign": sign,
                     "confidence": confidence,
+                    "timestamp": data.get("timestamp", 0),
+                    "sign_count": self.sign_count,
                 },
                 "exclude_id": None,  # include sender
             },
