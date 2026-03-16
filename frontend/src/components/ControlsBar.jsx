@@ -24,9 +24,12 @@
 function ControlsBar({
   isMicOn          = true,
   isCameraOn       = true,
+  isListening      = false,
+  isSpeechSupported = false,
   isSignMode       = false,
   onToggleMic,
   onToggleCamera,
+  onToggleSpeech,
   onToggleSign,
   onLeave,
   participantCount = 1,
@@ -78,6 +81,33 @@ function ControlsBar({
           {isCameraOn ? '📹' : '📷'}
         </button>
 
+        <div className="d-flex flex-column align-items-center" style={{ minWidth: 58 }}>
+          <button
+            style={{
+              ...base,
+              width: 'auto',
+              minWidth: 58,
+              borderRadius: 24,
+              padding: '0 14px',
+              background: isListening ? 'var(--accent-green)' : '#48484A',
+              color: '#fff',
+              opacity: isSpeechSupported ? 1 : 0.4,
+              cursor: isSpeechSupported ? 'pointer' : 'not-allowed',
+              fontSize: 14,
+              fontWeight: 700,
+            }}
+            title={isListening ? 'Disable captions' : 'Enable captions'}
+            onClick={onToggleSpeech}
+            disabled={!isSpeechSupported}
+            aria-label="Toggle captions"
+          >
+            CC
+          </button>
+          <span style={{ fontSize: 11, color: 'var(--text-secondary)', marginTop: 4, lineHeight: 1 }}>
+            Captions
+          </span>
+        </div>
+
         {/* Sign Language mode toggle */}
         <button
           style={{
@@ -111,12 +141,12 @@ function ControlsBar({
           left:      '50%',
           transform: 'translateX(-50%)',
           color:     'var(--text-secondary)',
-          fontSize:  14,
+          fontSize:  13,
           userSelect: 'none',
           whiteSpace: 'nowrap',
         }}
       >
-        👥 {participantCount} participant{participantCount !== 1 ? 's' : ''}
+        {participantCount} in call
       </div>
 
       {/* ── right: leave button ── */}

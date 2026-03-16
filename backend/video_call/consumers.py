@@ -42,6 +42,7 @@ NOTE: This in-memory dict only works correctly with InMemoryChannelLayer (single
 
 import json
 import logging
+import time
 
 from channels.db import database_sync_to_async
 from channels.generic.websocket import AsyncWebsocketConsumer
@@ -85,6 +86,7 @@ class SignMeetConsumer(AsyncWebsocketConsumer):
         self.group_name: str = f"room_{self.room_code}"
         self.user_id: str = ""
         self.user_name: str = ""
+        self.last_speech_time: float = 0.0
 
         # Fetch room from DB
         room = await self._get_room(self.room_code)
@@ -396,11 +398,19 @@ class SignMeetConsumer(AsyncWebsocketConsumer):
                 is_final: bool — True when SpeechRecognition fires a final result.
             }
         """
-        text = data.get("text", "")
-        is_final = data.get("is_final", False)
+        raw_text = data.get("text", "")
+        cleaned_text = str(raw_text).strip()
 
-        if not text:
-            return  # silently ignore empty interim results
+        if not cleaned_text:
+            return
+
+        if len(cleaned_text) > 500:
+            return
+
+        now = time.monotonic()
+        if now - self.last_speech_time < 0.1:
+            return
+        self.last_speech_time = now
 
         await self.channel_layer.group_send(
             self.group_name,
@@ -410,10 +420,11 @@ class SignMeetConsumer(AsyncWebsocketConsumer):
                     "type": "speech-text",
                     "from_id": self.user_id,
                     "from_name": self.user_name,
-                    "text": text,
-                    "is_final": is_final,
+                    "text": cleaned_text,
+                    "is_final": data.get("is_final", False),
+                    "timestamp": data.get("timestamp", 0),
                 },
-                "exclude_id": self.user_id,  # sender doesn't need own captions
+                "exclude_id": self.user_id,
             },
         )
 

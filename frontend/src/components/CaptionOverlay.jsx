@@ -13,43 +13,60 @@
 
 import { useState, useEffect, useRef } from 'react';
 
-function CaptionOverlay({ caption }) {
-  const [visible, setVisible]         = useState(false);
-  const [displayed, setDisplayed]     = useState(null);  // last caption we rendered
-  const hideTimerRef                  = useRef(null);
+function CaptionOverlay({ caption, onClear }) {
+  const [isVisible, setIsVisible] = useState(false);
+  const timerRef = useRef(null);
 
   useEffect(() => {
-    if (!caption?.text) return;
+    if (!caption) {
+      setIsVisible(false);
+      return;
+    }
 
-    // Update content and (re)start the hide timer.
-    setDisplayed(caption);
-    setVisible(true);
+    setIsVisible(true);
 
-    clearTimeout(hideTimerRef.current);
-    hideTimerRef.current = setTimeout(() => setVisible(false), 6000);
+    if (caption.isFinal) {
+      if (timerRef.current) {
+        clearTimeout(timerRef.current);
+      }
+      timerRef.current = setTimeout(() => {
+        onClear?.();
+      }, 6000);
+    }
 
-    return () => clearTimeout(hideTimerRef.current);
-  }, [caption]);
+    return () => {
+      if (timerRef.current) {
+        clearTimeout(timerRef.current);
+        timerRef.current = null;
+      }
+    };
+  }, [caption, onClear]);
 
-  if (!visible || !displayed) return null;
+  useEffect(() => {
+    return () => {
+      if (timerRef.current) {
+        clearTimeout(timerRef.current);
+        timerRef.current = null;
+      }
+    };
+  }, []);
 
-  const { text, fromName, isFinal } = displayed;
-
-  const textStyle = {
-    fontStyle:  isFinal ? 'normal' : 'italic',
-    opacity:    isFinal ? 1        : 0.7,
-    fontWeight: isFinal ? 500      : 400,
-  };
+  if (!isVisible || !caption) return null;
 
   return (
-    <div className="caption-overlay">
-      <span style={{ color: 'var(--accent-blue)', fontWeight: 600, marginRight: 6 }}>
-        {fromName}:
+    <div
+      className={`caption-overlay${caption.isFinal ? '' : ' interim'}`}
+      role="status"
+      aria-live="polite"
+      aria-atomic="true"
+    >
+      <span className="caption-from">
+        {caption.fromName}:
       </span>
-      <span style={textStyle}>{text}</span>
-      {!isFinal && (
-        <span style={{ opacity: 0.5, marginLeft: 4, fontSize: '0.85em' }}>…</span>
-      )}
+      {' '}
+      <span className="caption-text">
+        {caption.text}
+      </span>
     </div>
   );
 }

@@ -227,6 +227,76 @@ a:hover {
   backdrop-filter: blur(8px);
 }
 
+.caption-overlay.interim {
+  font-style: italic;
+  opacity: 0.9;
+}
+
+.caption-from {
+  font-weight: 700;
+  color: var(--accent-blue);
+  margin-right: 4px;
+}
+
+.caption-text {
+  color: white;
+}
+
+.speech-mode-indicator {
+  position: fixed;
+  bottom: 90px;
+  right: 16px;
+  z-index: 500;
+  max-width: 250px;
+  padding: 6px 14px;
+  border-radius: 20px;
+  font-size: 13px;
+  font-weight: 500;
+  transition: all 0.3s ease;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.speech-mode-indicator-denied {
+  background: var(--accent-red);
+  color: white;
+}
+
+.speech-mode-indicator-listening {
+  background: var(--bg-secondary);
+  border: 1px solid var(--accent-green);
+  color: var(--accent-green);
+}
+
+.speech-mode-indicator-interim {
+  background: var(--bg-secondary);
+  border: 1px solid var(--accent-blue);
+  color: white;
+}
+
+@keyframes pulse-dot {
+  0%, 100% { opacity: 1; transform: scale(1); }
+  50% { opacity: 0.5; transform: scale(0.8); }
+}
+
+.pulse-dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: var(--accent-green);
+  display: inline-block;
+  margin-right: 6px;
+  animation: pulse-dot 1.2s ease infinite;
+}
+
+.typing-indicator {
+  display: inline-block;
+  margin-right: 6px;
+  letter-spacing: 1px;
+  animation: pulse-dot 1.2s ease infinite;
+}
+
 /* ── Sign badge ──────────────────────────────────────────────────────────── */
 .sign-badge {
   position: absolute;

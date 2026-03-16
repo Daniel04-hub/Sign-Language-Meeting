@@ -19,17 +19,21 @@
  */
 
 import { useState, useEffect, useRef, useCallback } from 'react';
-import { useParams, useNavigate }                    from 'react-router-dom';
+import { useParams, useNavigate } from 'react-router-dom';
 
-import { useWebSocket }     from '../hooks/useWebSocket';
-import { useWebRTC }        from '../hooks/useWebRTC';
+import { useWebSocket } from '../hooks/useWebSocket';
+import { useWebRTC } from '../hooks/useWebRTC';
 import { useSignDetection } from '../hooks/useSignDetection';
+import { useSpeechCaption } from '../hooks/useSpeechCaption';
 
-import VideoGrid            from '../components/VideoGrid';
-import ControlsBar          from '../components/ControlsBar';
-import CaptionOverlay       from '../components/CaptionOverlay';
+import VideoGrid from '../components/VideoGrid';
+import ControlsBar from '../components/ControlsBar';
+import CaptionOverlay from '../components/CaptionOverlay';
 import SignDetectionOverlay from '../components/SignDetectionOverlay';
-import HandLandmarkCanvas   from '../components/HandLandmarkCanvas';
+import HandLandmarkCanvas from '../components/HandLandmarkCanvas';
+import SpeechModeIndicator from '../components/SpeechModeIndicator';
+import PermissionErrorModal from '../components/PermissionErrorModal';
+import Toast from '../components/Toast';
 
 // ─── elapsed-time hook ────────────────────────────────────────────────────────
 
@@ -49,11 +53,11 @@ function useElapsedTime() {
 
 function RoomPage() {
   const { roomCode } = useParams();
-  const navigate     = useNavigate();
-  const timer        = useElapsedTime();
+  const navigate = useNavigate();
+  const timer = useElapsedTime();
 
   // ── session identity (set by HomePage before navigating here) ───────
-  const userId   = sessionStorage.getItem('userId')   ?? '';
+  const userId = sessionStorage.getItem('userId') ?? '';
   const userName = sessionStorage.getItem('userName') ?? 'Anonymous';
 
   // Redirect to home if session data is missing (e.g. direct URL visit).
@@ -64,9 +68,16 @@ function RoomPage() {
   }, [userId, roomCode, navigate]);
 
   // ── local UI state ────────────────────────────────────────────────────
-  const [caption,        setCaption]        = useState(null);   // {text, fromName, isFinal}
+  const [caption, setCaption] = useState(null);   // {text, fromName, isFinal}
   const [signDetections, setSignDetections] = useState({});     // {userId: signText}
-  const [mediaError,     setMediaError]     = useState('');
+  const [mediaError, setMediaError] = useState('');
+  const [showPermissionModal, setShowPermissionModal] = useState(false);
+  const [permissionType, setPermissionType] = useState('microphone');
+  const [toast, setToast] = useState({ show: false, message: '', type: 'info' });
+
+  const showToast = useCallback((message, type = 'info') => {
+    setToast({ show: true, message, type });
+  }, []);
 
   // ── WebRTC hook ─────────────────────────────────────────────────────
   // sendMessage is provided later (by useWebSocket). We forward a stable
@@ -128,13 +139,17 @@ function RoomPage() {
       }
 
       // Speech-to-text caption (server echoes from sender).
-      case 'speech-text':
-        setCaption({
-          text:     message.text,
-          fromName: message.from_name ?? 'Unknown',
-          isFinal:  message.is_final  ?? true,
-        });
+      case 'speech-text': {
+        const senderId = message.user_id ?? message.from_id;
+        if (senderId !== userId) {
+          setCaption({
+            text: message.text,
+            fromName: message.from_name ?? 'Unknown',
+            isFinal: message.is_final ?? true,
+          });
+        }
         break;
+      }
 
       default:
         break;
@@ -169,6 +184,27 @@ function RoomPage() {
     userName,
   );
 
+  const {
+    isListening,
+    isSupported: isSpeechSupported,
+    permissionDenied,
+    interimText,
+    startListening,
+    stopListening,
+  } = useSpeechCaption(
+    sendMessage,
+    userId,
+    userName,
+    isSignModeOn,
+  );
+
+  useEffect(() => {
+    if (permissionDenied) {
+      setPermissionType('microphone');
+      setShowPermissionModal(true);
+    }
+  }, [permissionDenied]);
+
   // ── media initialisation ──────────────────────────────────────────────
   useEffect(() => {
     let cancelled = false;
@@ -181,15 +217,35 @@ function RoomPage() {
   // ── leave ─────────────────────────────────────────────────────────────
   const handleLeave = useCallback(() => {
     if (isSignModeOn) stopSignDetection();
+    stopListening();
     leaveRoom();
     navigate('/');
-  }, [isSignModeOn, stopSignDetection, leaveRoom, navigate]);
+  }, [isSignModeOn, stopSignDetection, stopListening, leaveRoom, navigate]);
 
   // ── sign mode toggle ───────────────────────────────────────────────────
   const handleToggleSign = useCallback(() => {
-    if (isSignModeOn) stopSignDetection();
-    else              startSignDetection();
-  }, [isSignModeOn, startSignDetection, stopSignDetection]);
+    if (isSignModeOn) {
+      stopSignDetection();
+      return;
+    }
+
+    stopListening();
+    startSignDetection();
+  }, [isSignModeOn, startSignDetection, stopSignDetection, stopListening]);
+
+  const handleToggleSpeech = useCallback(() => {
+    if (isListening) {
+      stopListening();
+      return;
+    }
+
+    if (isSignModeOn) {
+      showToast('Turn off Sign Mode first', 'warning');
+      return;
+    }
+
+    startListening();
+  }, [isListening, isSignModeOn, startListening, stopListening, showToast]);
 
   // ─────────────────────────────────────────────────────────────────────
   //  Render
@@ -322,16 +378,41 @@ function RoomPage() {
       {/* ── hidden canvas for MediaPipe frame capture ─────────────── */}
       <canvas ref={signCanvasRef} style={{ display: 'none' }} aria-hidden="true" />
 
-      {/* ── caption overlay (fixed, above controls) ───────────────── */}
-      <CaptionOverlay caption={caption} />
+      <CaptionOverlay
+        caption={caption}
+        onClear={() => setCaption(null)}
+      />
+
+      <SpeechModeIndicator
+        isListening={isListening}
+        isSupported={isSpeechSupported}
+        permissionDenied={permissionDenied}
+        interimText={interimText}
+      />
+
+      <PermissionErrorModal
+        show={showPermissionModal}
+        type={permissionType}
+        onClose={() => setShowPermissionModal(false)}
+      />
+
+      <Toast
+        message={toast.message}
+        show={toast.show}
+        type={toast.type}
+        onHide={() => setToast({ show: false, message: '', type: 'info' })}
+      />
 
       {/* ── controls bar (fixed bottom) ───────────────────────────── */}
       <ControlsBar
         isMicOn={isMicOn}
         isCameraOn={isCameraOn}
+        isListening={isListening}
+        isSpeechSupported={isSpeechSupported}
         isSignMode={isSignModeOn}
         onToggleMic={toggleMic}
         onToggleCamera={toggleCamera}
+        onToggleSpeech={handleToggleSpeech}
         onToggleSign={handleToggleSign}
         onLeave={handleLeave}
         participantCount={participants.length}
