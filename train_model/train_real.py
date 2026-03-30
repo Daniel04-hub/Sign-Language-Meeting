@@ -11,7 +11,7 @@ from sklearn.metrics import accuracy_score, classification_report
 import warnings
 warnings.filterwarnings('ignore')
 
-SAMPLES_PER_SIGN = 100
+SAMPLES_PER_SIGN = 300
 OUTPUT_DIR = os.path.join(
     os.path.dirname(os.path.abspath(__file__)),
     '..', 'frontend', 'public', 'model'
@@ -63,6 +63,8 @@ def load_dataset(dataset_path):
     X = []
     y = []
     total_skipped = 0
+    total_loaded = 0
+    total_augmented = 0
     for sign in signs:
         sign_path = os.path.join(dataset_path, sign)
         images = [
@@ -72,6 +74,7 @@ def load_dataset(dataset_path):
         np.random.shuffle(images)
         images = images[:SAMPLES_PER_SIGN]
         loaded = 0
+        augmented = 0
         skipped = 0
         for img_file in images:
             img_path = os.path.join(sign_path, img_file)
@@ -80,11 +83,31 @@ def load_dataset(dataset_path):
                 X.append(landmarks)
                 y.append(sign)
                 loaded += 1
+
+                flipped = landmarks.copy()
+                for i in range(21):
+                    flipped[i * 3] = -flipped[i * 3]
+                X.append(flipped.astype(np.float32))
+                y.append(sign)
+
+                noisy = landmarks + np.random.normal(0, 0.005, landmarks.shape)
+                X.append(noisy.astype(np.float32))
+                y.append(sign)
+                augmented += 2
             else:
                 skipped += 1
                 total_skipped += 1
-        print('  ' + sign + ': ' + str(loaded) + ' loaded, ' + str(skipped) + ' skipped')
+        total_loaded += loaded
+        total_augmented += augmented
+        print(
+            '  ' + sign + ': ' + str(loaded) + ' loaded (+ '
+            + str(augmented) + ' augmented = '
+            + str(loaded + augmented) + ' total), '
+            + str(skipped) + ' skipped'
+        )
     print()
+    print('Total original loaded: ' + str(total_loaded) + ' samples')
+    print('Total augmented: ' + str(total_augmented) + ' samples')
     print('Total loaded: ' + str(len(X)) + ' samples')
     print('Total skipped: ' + str(total_skipped))
     print()
@@ -109,15 +132,18 @@ def train(X, y):
     X_test_s = scaler.transform(X_test)
     print('Training MLP model...')
     clf = MLPClassifier(
-        hidden_layer_sizes=(256, 128, 64),
+        hidden_layer_sizes=(512, 256, 128, 64),
         activation='relu',
         solver='adam',
-        alpha=0.001,
-        max_iter=500,
+        alpha=0.0001,
+        batch_size=64,
+        learning_rate='adaptive',
+        learning_rate_init=0.001,
+        max_iter=1000,
         random_state=42,
         early_stopping=True,
-        validation_fraction=0.1,
-        n_iter_no_change=20,
+        validation_fraction=0.15,
+        n_iter_no_change=30,
         verbose=True
     )
     clf.fit(X_train_s, y_train)

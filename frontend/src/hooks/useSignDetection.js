@@ -22,10 +22,13 @@ import { measureLatency, logPerformance } from '../utils/performance';
 /* ── constants ──────────────────────────────────────────────────────────── */
 
 /** Minimum prediction probability accepted as a valid detection. */
-const CONFIDENCE_THRESHOLD = 0.85;
+const CONFIDENCE_THRESHOLD = 0.75;
 
 /** Minimum milliseconds between two reports of the same sign. */
-const DEBOUNCE_MS = 2000;
+const DEBOUNCE_MS = 1500;
+
+/** Number of recent matching frames required before confirming a sign. */
+const CONFIRMATION_FRAMES = 3;
 
 /** Target frames per second sent to MediaPipe. */
 const CAPTURE_FPS = 10;
@@ -49,7 +52,7 @@ const SIGN_LABELS = ['HELLO', 'THANKS', 'BYE', 'YES', 'NO'];
  *   landmarks:          Array|null,
  * }}
  */
-export function useSignDetection(localVideoRef, sendMessage, userId, userName) {
+export function useSignDetection(localVideoRef, sendMessage, userId, userName, onLocalSignDetected) {
   /* ── refs (mutation does not need to trigger renders) ───────────────── */
   const handsRef       = useRef(null);   // MediaPipe Hands instance
   const canvasRef      = useRef(null);   // hidden capture canvas
@@ -60,10 +63,16 @@ export function useSignDetection(localVideoRef, sendMessage, userId, userName) {
   const animFrameRef   = useRef(null);   // requestAnimationFrame id
   const mockIntervalId = useRef(null);   // setInterval id for mock mode
   const lastSignRef    = useRef({ sign: null, timestamp: 0 });
+  const detectionHistoryRef = useRef([]);
+  const predictionHistoryRef = useRef([]);
   const isProcessingRef = useRef(false);
   const tfRef = useRef(null);
   const memoryCheckIntervalRef = useRef(null);
   const captureTimerRef = useRef(null);
+  const frameStatsRef = useRef({
+    frameCount: 0,
+    lastFpsUpdate: performance.now(),
+  });
   const inputBufferRef = useRef(new Float32Array(63));
   const sendRef        = useRef(sendMessage);
   useEffect(() => { sendRef.current = sendMessage; }, [sendMessage]);
@@ -74,6 +83,10 @@ export function useSignDetection(localVideoRef, sendMessage, userId, userName) {
   const [isModelLoaded,  setIsModelLoaded]  = useState(false);
   const [isHandDetected, setIsHandDetected] = useState(false);
   const [mockMode,       setMockMode]       = useState(false);
+  const [currentConfidence, setCurrentConfidence] = useState(0);
+  const [predictionHistory, setPredictionHistory] = useState([]);
+  const [totalPredictions, setTotalPredictions] = useState(0);
+  const [fps, setFps] = useState(0);
   const [landmarks,      setLandmarks]      = useState(null);  // for debug canvas
 
   /* ── sendMessage stable wrapper ─────────────────────────────────────── */
@@ -101,6 +114,11 @@ export function useSignDetection(localVideoRef, sendMessage, userId, userName) {
 
     lastSignRef.current = { sign, timestamp: now };
     setCurrentSign(sign);
+    setCurrentConfidence(confidence);
+
+    if (typeof onLocalSignDetected === 'function') {
+      onLocalSignDetected(sign, confidence);
+    }
 
     // Broadcast to all room participants via WebSocket.
     sendMessageStable('sign-detected', {
@@ -111,7 +129,7 @@ export function useSignDetection(localVideoRef, sendMessage, userId, userName) {
     });
 
     console.log(`[SignDetect] Sign detected: ${sign} (${(confidence * 100).toFixed(0)}%)`);
-  }, [userId, userName, sendMessageStable]);
+  }, [userId, userName, sendMessageStable, onLocalSignDetected]);
 
   /* ──────────────────────────────────────────────────────────────────────
    * extractLandmarks
@@ -251,8 +269,35 @@ export function useSignDetection(localVideoRef, sendMessage, userId, userName) {
         return { sign: mappedSign || SIGN_LABELS[maxIndex], confidence };
       });
 
-      if (result && result.confidence >= CONFIDENCE_THRESHOLD) {
-        onSignDetected(result.sign, result.confidence);
+      if (result && result.sign) {
+        setTotalPredictions((prev) => prev + 1);
+
+        const historyEntry = {
+          sign: result.sign,
+          confidence: result.confidence,
+        };
+
+        predictionHistoryRef.current.push(historyEntry);
+        if (predictionHistoryRef.current.length > 5) {
+          predictionHistoryRef.current.shift();
+        }
+        setPredictionHistory([...predictionHistoryRef.current]);
+
+        detectionHistoryRef.current.push(historyEntry);
+        if (detectionHistoryRef.current.length > CONFIRMATION_FRAMES) {
+          detectionHistoryRef.current.shift();
+        }
+
+        const history = detectionHistoryRef.current;
+        if (history.length >= CONFIRMATION_FRAMES) {
+          const allSame = history.every((h) => h.sign === result.sign);
+          const avgConfidence = history.reduce((sum, h) => sum + h.confidence, 0) / history.length;
+
+          if (allSame && avgConfidence >= CONFIDENCE_THRESHOLD) {
+            onSignDetected(result.sign, avgConfidence);
+            detectionHistoryRef.current = [];
+          }
+        }
       }
     } catch (err) {
       console.error('[SignDetect] Prediction error:', err);
@@ -277,6 +322,7 @@ export function useSignDetection(localVideoRef, sendMessage, userId, userName) {
     ) {
       setIsHandDetected(false);
       setLandmarks(null);
+      detectionHistoryRef.current = [];
       return;
     }
 
@@ -353,8 +399,8 @@ export function useSignDetection(localVideoRef, sendMessage, userId, userName) {
       hands.setOptions({
         maxNumHands:              1,
         modelComplexity:          1,
-        minDetectionConfidence:   0.7,
-        minTrackingConfidence:    0.5,
+        minDetectionConfidence:   0.8,
+        minTrackingConfidence:    0.7,
       });
 
       hands.onResults(processHandResults);
@@ -390,8 +436,17 @@ export function useSignDetection(localVideoRef, sendMessage, userId, userName) {
     }
 
     setCurrentSign(null);
+    setCurrentConfidence(0);
     setIsHandDetected(false);
     setLandmarks(null);
+    detectionHistoryRef.current = [];
+    predictionHistoryRef.current = [];
+    setPredictionHistory([]);
+    setFps(0);
+    frameStatsRef.current = {
+      frameCount: 0,
+      lastFpsUpdate: performance.now(),
+    };
   }, []);
 
   /* ──────────────────────────────────────────────────────────────────────
@@ -442,6 +497,16 @@ export function useSignDetection(localVideoRef, sendMessage, userId, userName) {
           await hands.send({ image: canvas });
           const frameTime = measureLatency(frameStart);
           logPerformance('frame-time', frameTime, 'ms');
+
+          frameStatsRef.current.frameCount += 1;
+          const now = performance.now();
+          const elapsed = now - frameStatsRef.current.lastFpsUpdate;
+          if (elapsed >= 1000) {
+            const currentFps = Math.round((frameStatsRef.current.frameCount * 1000) / elapsed);
+            setFps(currentFps);
+            frameStatsRef.current.frameCount = 0;
+            frameStatsRef.current.lastFpsUpdate = now;
+          }
         } catch (err) {
           // MediaPipe may throw if the tab is backgrounded — ignore.
           if (isRunningRef.current) {
@@ -508,6 +573,7 @@ export function useSignDetection(localVideoRef, sendMessage, userId, userName) {
     stopMockDetection(mockIntervalId.current);
     mockIntervalId.current = null;
     setIsSignModeOn(false);
+    detectionHistoryRef.current = [];
     console.log('[SignDetect] Sign detection stopped');
   }, [stopCapture]);
 
@@ -544,8 +610,13 @@ export function useSignDetection(localVideoRef, sendMessage, userId, userName) {
   return {
     isSignModeOn,
     currentSign,
+    currentConfidence,
     isModelLoaded,
     isHandDetected,
+    mockMode,
+    predictionHistory,
+    totalPredictions,
+    fps,
     startSignDetection,
     stopSignDetection,
     canvasRef,

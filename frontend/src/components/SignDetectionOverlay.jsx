@@ -74,10 +74,12 @@ function SignDetectionOverlay({
   isSignModeOn   = false,
   isHandDetected = false,
   currentSign    = null,
+  confidence     = 0,
   isModelLoaded  = false,
 }) {
   // Track sign display separately so we can hold it for 2 s after it clears.
   const [displaySign, setDisplaySign]   = useState(null);
+  const [displayConfidence, setDisplayConfidence] = useState(0);
   const [signVisible,  setSignVisible]  = useState(false);
   const [signKey,      setSignKey]      = useState(0);     // force re-mount for animation
 
@@ -88,12 +90,13 @@ function SignDetectionOverlay({
   useEffect(() => {
     if (!currentSign) return;
     setDisplaySign(currentSign);
+    setDisplayConfidence(confidence);
     setSignVisible(true);
     setSignKey(k => k + 1);
 
     const t = setTimeout(() => setSignVisible(false), 2000);
     return () => clearTimeout(t);
-  }, [currentSign]);
+  }, [currentSign, confidence]);
 
   if (!isSignModeOn) return null;
 
@@ -137,7 +140,7 @@ function SignDetectionOverlay({
             padding:    '8px 20px',
           })}
         >
-          🤟 {displaySign}
+          🤟 {`${displaySign} (${Math.round(displayConfidence * 100)}%)`}
         </span>
       )}
 

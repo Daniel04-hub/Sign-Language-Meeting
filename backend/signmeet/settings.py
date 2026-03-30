@@ -8,6 +8,8 @@ Requires a .env file at backend/.env (see .env.example).
 """
 
 from pathlib import Path
+from urllib.parse import urlparse
+import socket
 
 from decouple import Csv, config
 
@@ -94,19 +96,30 @@ TEMPLATES = [
 ]
 
 # ─────────────────────────────────────────────────────────────────────────────
-# Database — PostgreSQL only (psycopg2-binary)
-# All values read from .env / environment variables.
+# Database
+# Default: PostgreSQL (values from .env)
+# Local fallback: SQLite when USE_SQLITE=True
 # ─────────────────────────────────────────────────────────────────────────────
-DATABASES = {
-    "default": {
-        "ENGINE": "django.db.backends.postgresql",
-        "NAME": config("DB_NAME", default="signmeet_db"),
-        "USER": config("DB_USER", default="postgres"),
-        "PASSWORD": config("DB_PASSWORD", default="postgres"),
-        "HOST": config("DB_HOST", default="localhost"),
-        "PORT": config("DB_PORT", default="5432"),
+USE_SQLITE = config("USE_SQLITE", default=False, cast=bool)
+
+if USE_SQLITE:
+    DATABASES = {
+        "default": {
+            "ENGINE": "django.db.backends.sqlite3",
+            "NAME": BASE_DIR / "db.sqlite3",
+        }
     }
-}
+else:
+    DATABASES = {
+        "default": {
+            "ENGINE": "django.db.backends.postgresql",
+            "NAME": config("DB_NAME", default="signmeet_db"),
+            "USER": config("DB_USER", default="postgres"),
+            "PASSWORD": config("DB_PASSWORD", default="postgres"),
+            "HOST": config("DB_HOST", default="localhost"),
+            "PORT": config("DB_PORT", default="5432"),
+        }
+    }
 
 # ─────────────────────────────────────────────────────────────────────────────
 # Django Channels — InMemoryChannelLayer for dev
@@ -114,7 +127,20 @@ DATABASES = {
 # ─────────────────────────────────────────────────────────────────────────────
 REDIS_URL = config("REDIS_URL", default="")
 
-if REDIS_URL:
+
+def _redis_reachable(redis_url: str) -> bool:
+    if not redis_url:
+        return False
+    try:
+        parsed = urlparse(redis_url)
+        host = parsed.hostname or "localhost"
+        port = parsed.port or 6379
+        with socket.create_connection((host, port), timeout=0.35):
+            return True
+    except OSError:
+        return False
+
+if REDIS_URL and _redis_reachable(REDIS_URL):
     CHANNEL_LAYERS = {
         "default": {
             "BACKEND": "channels_redis.core.RedisChannelLayer",

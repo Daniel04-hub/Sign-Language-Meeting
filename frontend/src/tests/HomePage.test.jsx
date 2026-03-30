@@ -103,4 +103,40 @@ describe('HomePage', () => {
 
     expect(joinCodeInput).toHaveValue('ABCD1234');
   });
+
+  it('shows validation error when join display name is too short', () => {
+    renderHomePage();
+
+    fireEvent.change(screen.getByLabelText(/your display name/i, { selector: '#join-name' }), {
+      target: { value: 'd' },
+    });
+    fireEvent.change(screen.getByLabelText(/room code/i), {
+      target: { value: 'ABCD1234' },
+    });
+
+    fireEvent.click(screen.getByRole('button', { name: /join room/i }));
+
+    expect(screen.getByText(/Display name must be at least 2 characters\./i)).toBeInTheDocument();
+  });
+
+  it('surfaces backend user_name error during join', async () => {
+    axios.post.mockRejectedValue({
+      response: { data: { user_name: ['User name must be at least 2 characters long.'] } },
+    });
+
+    renderHomePage();
+
+    fireEvent.change(screen.getByLabelText(/your display name/i, { selector: '#join-name' }), {
+      target: { value: 'Al' },
+    });
+    fireEvent.change(screen.getByLabelText(/room code/i), {
+      target: { value: 'ABCD1234' },
+    });
+
+    fireEvent.click(screen.getByRole('button', { name: /join room/i }));
+
+    await waitFor(() => {
+      expect(screen.getByText(/User name must be at least 2 characters long\./i)).toBeInTheDocument();
+    });
+  });
 });

@@ -36,9 +36,9 @@ import PermissionErrorModal from '../components/PermissionErrorModal';
 import Toast from '../components/Toast';
 import TTSControls from '../components/TTSControls';
 import ParticipantSidebar from '../components/ParticipantSidebar';
-import WaitingState from '../components/WaitingState';
 import MediaErrorScreen from '../components/MediaErrorScreen';
 import ConnectionStatusBar from '../components/ConnectionStatusBar';
+import DebugPanel from '../components/DebugPanel';
 import {
   setTTSVolume,
   setTTSEnabled,
@@ -51,9 +51,18 @@ function RoomPage() {
   const { roomCode } = useParams();
   const navigate = useNavigate();
 
-  // ── session identity (set by HomePage before navigating here) ───────
-  const userId = sessionStorage.getItem('userId') ?? '';
-  const userName = sessionStorage.getItem('userName') ?? 'Anonymous';
+  // ── session identity (tab-scoped for reliable multi-tab joins) ───────
+  const [userId] = useState(() => {
+    const generatedId =
+      globalThis.crypto?.randomUUID?.()
+      ?? `user-${Date.now()}-${Math.random().toString(36).slice(2, 10)}`;
+    sessionStorage.setItem('userId', generatedId);
+    return generatedId;
+  });
+  const [userName] = useState(() => {
+    const storedName = sessionStorage.getItem('userName')?.trim();
+    return storedName || 'Anonymous';
+  });
 
   // Redirect to home if session data is missing (e.g. direct URL visit).
   useEffect(() => {
@@ -74,6 +83,9 @@ function RoomPage() {
   const [isSidebarOpen, setIsSidebarOpen] = useState(false);
   const [codeCopied, setCodeCopied] = useState(false);
   const [timerDisplay, setTimerDisplay] = useState('00:00:00');
+  const [currentSign, setCurrentSign] = useState(null);
+  const [currentConfidence, setCurrentConfidence] = useState(0);
+  const showDebug = new URLSearchParams(window.location.search).get('debug') === 'true';
 
   const showToast = useCallback((message, type = 'info') => {
     setToast({ show: true, message, type });
@@ -201,9 +213,14 @@ function RoomPage() {
   // ── sign detection hook ───────────────────────────────────────────────
   const {
     isSignModeOn,
-    currentSign,
+    currentSign: detectedSign,
+    currentConfidence: detectedConfidence,
     isModelLoaded,
     isHandDetected,
+    mockMode,
+    predictionHistory,
+    totalPredictions,
+    fps,
     startSignDetection,
     stopSignDetection,
     canvasRef: signCanvasRef,
@@ -213,7 +230,19 @@ function RoomPage() {
     sendMessage,
     userId,
     userName,
+    (sign, confidence) => {
+      setCurrentSign(sign);
+      setCurrentConfidence(confidence);
+    },
   );
+
+  useEffect(() => {
+    if (!detectedSign) {
+      return;
+    }
+    setCurrentSign(detectedSign);
+    setCurrentConfidence(detectedConfidence || 0);
+  }, [detectedSign, detectedConfidence]);
 
   const {
     isListening,
@@ -534,20 +563,12 @@ function RoomPage() {
 
       {/* ── video grid / waiting state ───────────────────────────── */}
       <div id="video-grid" style={{ flex: 1, overflow: 'hidden', padding: '12px 12px 0' }}>
-        {participants.length <= 1 ? (
-          <WaitingState
-            roomCode={roomCode}
-            userName={userName}
-            onCopyCode={handleCopyRoomCode}
-          />
-        ) : (
-          <VideoGrid
-            participants={participants}
-            signDetections={signDetections}
-            isMicOn={isMicOn}
-            isCameraOn={isCameraOn}
-          />
-        )}
+        <VideoGrid
+          participants={participants}
+          signDetections={signDetections}
+          isMicOn={isMicOn}
+          isCameraOn={isCameraOn}
+        />
       </div>
 
       <ParticipantSidebar
@@ -562,8 +583,20 @@ function RoomPage() {
         isSignModeOn={isSignModeOn}
         isHandDetected={isHandDetected}
         currentSign={currentSign}
+        confidence={currentConfidence}
         isModelLoaded={isModelLoaded}
       />
+
+      {showDebug && (
+        <DebugPanel
+          predictions={predictionHistory}
+          isHandDetected={isHandDetected}
+          isModelLoaded={isModelLoaded}
+          isMockMode={mockMode}
+          fps={fps}
+          totalPredictions={totalPredictions}
+        />
+      )}
 
       {/* ── dev-only hand landmark debug canvas (bottom-left) ─────── */}
       <HandLandmarkCanvas

@@ -79,20 +79,38 @@ function HomePage() {
     e.preventDefault();
     setError('');
 
-    if (!joinName.trim()) { setError('Enter your display name.'); return; }
-    if (!joinCode.trim()) { setError('Enter the room code.');     return; }
+    const sanitizedCode = joinCode.replace(/[^A-Za-z0-9]/g, '').toUpperCase();
+    const normalizedJoinName = joinName.trim();
+
+    if (!normalizedJoinName) {
+      setError('Enter your display name.');
+      return;
+    }
+    if (normalizedJoinName.length < 2) {
+      setError('Display name must be at least 2 characters.');
+      return;
+    }
+    if (!sanitizedCode) {
+      setError('Enter the room code.');
+      return;
+    }
+    if (sanitizedCode.length !== 8) {
+      setError('Room code must be exactly 8 letters/numbers.');
+      return;
+    }
 
     setIsJoining(true);
     try {
       const { data } = await axios.post('/api/rooms/join/', {
-        room_code: joinCode.trim().toUpperCase(),
-        user_name: joinName.trim(),
+        room_code: sanitizedCode,
+        user_name: normalizedJoinName,
       });
       saveSession(joinName, data.room_code);
     } catch (err) {
       const msg =
         err.response?.data?.detail ||
         err.response?.data?.room_code?.[0] ||
+        err.response?.data?.user_name?.[0] ||
         'Could not join room. Check the code and try again.';
       setError(msg);
     } finally {
@@ -128,10 +146,10 @@ function HomePage() {
         )}
 
         {/* ── two-column cards ── */}
-        <div className="row g-4 align-items-stretch position-relative">
+        <div className="row g-4 align-items-stretch">
 
           {/* ── create card ── */}
-          <div className="col-12 col-md-6 pe-md-4">
+          <div className="col-12 col-md-6">
             <div className="card h-100">
               <div className="card-body p-4 home-card">
                 <h2 className="home-card-title">
@@ -200,12 +218,11 @@ function HomePage() {
           </div>
 
           {/* ── join card ── */}
-          <div className="d-none d-md-block" style={{ position: 'absolute', left: '50%', top: 20, bottom: 20, width: 1, background: 'var(--border-color)' }} />
           <div className="col-12 d-md-none">
             <div className="divider-with-text">or</div>
           </div>
 
-          <div className="col-12 col-md-6 ps-md-4">
+          <div className="col-12 col-md-6">
             <div className="card h-100">
               <div className="card-body p-4 home-card">
                 <h2 className="home-card-title">
@@ -244,7 +261,14 @@ function HomePage() {
                       placeholder="PASTE ROOM CODE"
                       maxLength={8}
                       value={joinCode}
-                      onChange={e => setJoinCode(e.target.value.toUpperCase())}
+                      onChange={e =>
+                        setJoinCode(
+                          e.target.value
+                            .replace(/[^A-Za-z0-9]/g, '')
+                            .toUpperCase()
+                            .slice(0, 8),
+                        )
+                      }
                       disabled={isJoining}
                       style={{
                         letterSpacing: 3,
@@ -284,16 +308,13 @@ function HomePage() {
 
         <div className="row mt-4 text-center">
           <div className="col-4">
-            <div style={{ fontSize: 16 }}>🔗</div>
-            <div style={{ fontSize: 12, color: 'var(--text-secondary)' }}>P2P Video</div>
+            <div style={{ fontSize: 12, color: 'var(--text-secondary)', fontWeight: 600, letterSpacing: 0.4 }}>P2P VIDEO</div>
           </div>
           <div className="col-4">
-            <div style={{ fontSize: 16 }}>🔒</div>
-            <div style={{ fontSize: 12, color: 'var(--text-secondary)' }}>No Recording</div>
+            <div style={{ fontSize: 12, color: 'var(--text-secondary)', fontWeight: 600, letterSpacing: 0.4 }}>NO RECORDING</div>
           </div>
           <div className="col-4">
-            <div style={{ fontSize: 16 }}>👥</div>
-            <div style={{ fontSize: 12, color: 'var(--text-secondary)' }}>Up to 8 Users</div>
+            <div style={{ fontSize: 12, color: 'var(--text-secondary)', fontWeight: 600, letterSpacing: 0.4 }}>UP TO 8 USERS</div>
           </div>
         </div>
 

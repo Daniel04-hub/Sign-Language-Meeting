@@ -3,10 +3,10 @@
  *
  * Fixed bottom bar with all call-control buttons.
  * Buttons (left to right):
- *   🎤/🔇  Mic toggle      — red background when muted
- *   📹/📷  Camera toggle   — red background when off
- *   🤟    Sign Mode toggle — purple background when active
- *   🚪    Leave            — always red
+ *   Mic icon        Mic toggle       — red background when muted
+ *   Camera icon     Camera toggle    — red background when off
+ *   Sign icon       Sign Mode toggle — purple background when active
+ *   Exit icon       Leave            — always red
  *
  * Centre displays the participant count.
  *
@@ -20,6 +20,69 @@
  *   onLeave          {() => void}
  *   participantCount {number}
  */
+
+function MicIcon() {
+  return (
+    <svg width="18" height="18" viewBox="0 0 24 24" fill="none" aria-hidden="true">
+      <rect x="9" y="3" width="6" height="12" rx="3" stroke="currentColor" strokeWidth="2" />
+      <path d="M6 10v1a6 6 0 0 0 12 0v-1" stroke="currentColor" strokeWidth="2" strokeLinecap="round" />
+      <path d="M12 17v4" stroke="currentColor" strokeWidth="2" strokeLinecap="round" />
+      <path d="M9 21h6" stroke="currentColor" strokeWidth="2" strokeLinecap="round" />
+    </svg>
+  );
+}
+
+function MicMutedIcon() {
+  return (
+    <svg width="18" height="18" viewBox="0 0 24 24" fill="none" aria-hidden="true">
+      <rect x="9" y="3" width="6" height="12" rx="3" stroke="currentColor" strokeWidth="2" />
+      <path d="M6 10v1a6 6 0 0 0 12 0v-1" stroke="currentColor" strokeWidth="2" strokeLinecap="round" />
+      <path d="M12 17v4" stroke="currentColor" strokeWidth="2" strokeLinecap="round" />
+      <path d="M9 21h6" stroke="currentColor" strokeWidth="2" strokeLinecap="round" />
+      <path d="M4 4l16 16" stroke="currentColor" strokeWidth="2" strokeLinecap="round" />
+    </svg>
+  );
+}
+
+function CameraIcon() {
+  return (
+    <svg width="18" height="18" viewBox="0 0 24 24" fill="none" aria-hidden="true">
+      <rect x="3" y="7" width="13" height="10" rx="2" stroke="currentColor" strokeWidth="2" />
+      <path d="M16 10l5-3v10l-5-3" stroke="currentColor" strokeWidth="2" strokeLinejoin="round" />
+    </svg>
+  );
+}
+
+function CameraOffIcon() {
+  return (
+    <svg width="18" height="18" viewBox="0 0 24 24" fill="none" aria-hidden="true">
+      <rect x="3" y="7" width="13" height="10" rx="2" stroke="currentColor" strokeWidth="2" />
+      <path d="M16 10l5-3v10l-5-3" stroke="currentColor" strokeWidth="2" strokeLinejoin="round" />
+      <path d="M4 4l16 16" stroke="currentColor" strokeWidth="2" strokeLinecap="round" />
+    </svg>
+  );
+}
+
+function SignModeIcon() {
+  return (
+    <svg width="18" height="18" viewBox="0 0 24 24" fill="none" aria-hidden="true">
+      <path d="M7 13V7a1.5 1.5 0 0 1 3 0v5" stroke="currentColor" strokeWidth="2" strokeLinecap="round" />
+      <path d="M10 12V5.5a1.5 1.5 0 0 1 3 0V12" stroke="currentColor" strokeWidth="2" strokeLinecap="round" />
+      <path d="M13 12V7a1.5 1.5 0 0 1 3 0v5" stroke="currentColor" strokeWidth="2" strokeLinecap="round" />
+      <path d="M7 13c0 5 2 8 6 8s6-3 6-8" stroke="currentColor" strokeWidth="2" strokeLinecap="round" />
+    </svg>
+  );
+}
+
+function LeaveIcon() {
+  return (
+    <svg width="16" height="16" viewBox="0 0 24 24" fill="none" aria-hidden="true">
+      <path d="M10 17l5-5-5-5" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" />
+      <path d="M15 12H4" stroke="currentColor" strokeWidth="2" strokeLinecap="round" />
+      <path d="M20 4v16" stroke="currentColor" strokeWidth="2" strokeLinecap="round" />
+    </svg>
+  );
+}
 
 function ControlsBar({
   isMicOn          = true,
@@ -69,7 +132,7 @@ function ControlsBar({
           onClick={onToggleMic}
           aria-label={isMicOn ? 'Mute' : 'Unmute'}
         >
-          {isMicOn ? '🎤' : '🔇'}
+          {isMicOn ? <MicIcon /> : <MicMutedIcon />}
         </button>
 
         {/* Camera toggle */}
@@ -79,7 +142,7 @@ function ControlsBar({
           onClick={onToggleCamera}
           aria-label={isCameraOn ? 'Camera off' : 'Camera on'}
         >
-          {isCameraOn ? '📹' : '📷'}
+          {isCameraOn ? <CameraIcon /> : <CameraOffIcon />}
         </button>
 
         <div className="d-flex flex-column align-items-center" style={{ minWidth: 58 }}>
@@ -127,7 +190,7 @@ function ControlsBar({
           aria-pressed={isSignMode}
           aria-label="Toggle sign mode"
         >
-          🤟
+          <SignModeIcon />
           <span style={{ fontSize: 13, fontWeight: 600 }}>
             Sign Mode {isSignMode ? 'ON' : 'OFF'}
           </span>
@@ -189,7 +252,10 @@ function ControlsBar({
           onClick={onLeave}
           aria-label="Leave meeting"
         >
-          🚪 Leave
+          <span style={{ display: 'inline-flex', alignItems: 'center', gap: 8 }}>
+            <LeaveIcon />
+            Leave
+          </span>
         </button>
       </div>
 

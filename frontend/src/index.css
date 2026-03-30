@@ -750,11 +750,20 @@ input[type='range'].tts-volume::-moz-range-thumb {
 }
 
 .home-card {
-  background: var(--bg-card);
-  border: 1px solid var(--border-color);
-  border-radius: 16px;
+  background: transparent;
+  border: 0;
+  border-radius: 0;
   padding: 28px;
   width: 100%;
+}
+
+.home-page .card {
+  background: var(--bg-card) !important;
+  border: 1px solid var(--border-color) !important;
+  border-radius: 16px;
+  box-shadow: 0 10px 26px rgba(0, 0, 0, 0.22);
+  overflow: hidden;
+  padding: 0;
 }
 
 .home-card-title {
