@@ -42,7 +42,7 @@ import DebugPanel from '../components/DebugPanel';
 import {
   setTTSVolume,
   setTTSEnabled,
-  speakWithPriority,
+  speakSign,
 } from '../utils/tts';
 
 // ─── RoomPage ─────────────────────────────────────────────────────────────────
@@ -91,18 +91,13 @@ function RoomPage() {
     setToast({ show: true, message, type });
   }, []);
 
-  const signSpeechMap = {
-    HELLO: 'Hello there',
-    THANKS: 'Thank you',
-    BYE: 'Goodbye',
-    YES: 'Yes',
-    NO: 'No',
-  };
-
   // ── WebRTC hook ─────────────────────────────────────────────────────
   // sendMessage is provided later (by useWebSocket). We forward a stable
   // ref so useWebRTC / useSignDetection callbacks always use the live sender.
   const sendMessageRef = useRef(() => {});
+
+  const lastSignRef = useRef({});
+  const lastSignTimeRef = useRef({});
 
   const {
     participants,
@@ -148,27 +143,46 @@ function RoomPage() {
 
       // Sign language detection result (broadcast by server to ALL users).
       case 'sign-detected': {
-        const fromId   = message.from_id ?? message.user_id;
-        const signText = message.sign;
-        const confidence = Number(message.confidence ?? 0);
+        const data = {
+          ...message,
+          from_id: message.from_id ?? message.user_id,
+        };
 
-        setSignDetections(prev => ({ ...prev, [fromId]: signText }));
+        const receivedSign = data.sign;
 
-        console.log(
-          `SignMeet: Sign detected: ${signText} confidence: ${(confidence * 100).toFixed(1)}%`,
-        );
-
-        if (fromId !== userId) {
-          const phrase = signSpeechMap[signText] ?? signText;
-          speakWithPriority(phrase, 'normal');
+        if (
+          !receivedSign ||
+          receivedSign === 'NOTHING' ||
+          receivedSign === 'del' ||
+          receivedSign === 'space'
+        ) {
+          break;
         }
 
-        // Auto-clear the badge after 2.5 s.
+        setSignDetections((prev) => ({
+          ...prev,
+          [data.from_id]: receivedSign,
+        }));
+
+        if (data.from_id !== userId) {
+          const now = Date.now();
+          const lastTime = lastSignTimeRef.current[data.from_id] || 0;
+
+          if (
+            receivedSign !== lastSignRef.current[data.from_id] ||
+            now - lastTime > 3000
+          ) {
+            speakSign(receivedSign);
+            lastSignRef.current[data.from_id] = receivedSign;
+            lastSignTimeRef.current[data.from_id] = now;
+          }
+        }
+
         setTimeout(() => {
-          setSignDetections(prev => {
-            const next = { ...prev };
-            delete next[fromId];
-            return next;
+          setSignDetections((prev) => {
+            const updated = { ...prev };
+            delete updated[data.from_id];
+            return updated;
           });
         }, 2500);
         break;
@@ -217,6 +231,7 @@ function RoomPage() {
     currentConfidence: detectedConfidence,
     isModelLoaded,
     isHandDetected,
+    isHandStable,
     mockMode,
     predictionHistory,
     totalPredictions,
@@ -582,6 +597,7 @@ function RoomPage() {
       <SignDetectionOverlay
         isSignModeOn={isSignModeOn}
         isHandDetected={isHandDetected}
+        isHandStable={isHandStable}
         currentSign={currentSign}
         confidence={currentConfidence}
         isModelLoaded={isModelLoaded}

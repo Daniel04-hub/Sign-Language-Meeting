@@ -73,6 +73,7 @@ function injectStyles() {
 function SignDetectionOverlay({
   isSignModeOn   = false,
   isHandDetected = false,
+  isHandStable = false,
   currentSign    = null,
   confidence     = 0,
   isModelLoaded  = false,
@@ -89,6 +90,7 @@ function SignDetectionOverlay({
   // Show sign for 2 s whenever currentSign changes.
   useEffect(() => {
     if (!currentSign) return;
+    if (Number(confidence) < 0.92) return;
     setDisplaySign(currentSign);
     setDisplayConfidence(confidence);
     setSignVisible(true);
@@ -116,14 +118,18 @@ function SignDetectionOverlay({
           ? (
             <span
               className="sdo-pulse"
-              style={pill({ background: 'rgba(10,132,255,0.85)', color: '#fff' })}
+              style={pill(
+                isHandStable
+                  ? { background: 'rgba(100,100,100,0.75)', color: '#e5e5e5' }
+                  : { background: 'rgba(10,132,255,0.85)', color: '#fff' },
+              )}
             >
-              👁️ Watching…
+              {isHandStable ? 'Analyzing…' : 'Hand detected'}
             </span>
           )
           : (
             <span style={pill({ background: 'rgba(100,100,100,0.75)', color: '#e5e5e5' })}>
-              ✋ Show your hand
+              Show your hand to sign
             </span>
           )
       )}
@@ -140,7 +146,7 @@ function SignDetectionOverlay({
             padding:    '8px 20px',
           })}
         >
-          🤟 {`${displaySign} (${Math.round(displayConfidence * 100)}%)`}
+          {`${displaySign} ${Math.round(displayConfidence * 100)}%`}
         </span>
       )}
 

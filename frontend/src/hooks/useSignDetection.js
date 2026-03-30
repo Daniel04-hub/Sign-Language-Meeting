@@ -22,13 +22,12 @@ import { measureLatency, logPerformance } from '../utils/performance';
 /* ── constants ──────────────────────────────────────────────────────────── */
 
 /** Minimum prediction probability accepted as a valid detection. */
-const CONFIDENCE_THRESHOLD = 0.75;
+const CONFIDENCE_THRESHOLD = 0.92;
 
 /** Minimum milliseconds between two reports of the same sign. */
-const DEBOUNCE_MS = 1500;
+const DEBOUNCE_MS = 3000;
 
-/** Number of recent matching frames required before confirming a sign. */
-const CONFIRMATION_FRAMES = 3;
+const IGNORED_SIGNS = ['NOTHING', 'del', 'space'];
 
 /** Target frames per second sent to MediaPipe. */
 const CAPTURE_FPS = 10;
@@ -63,8 +62,12 @@ export function useSignDetection(localVideoRef, sendMessage, userId, userName, o
   const animFrameRef   = useRef(null);   // requestAnimationFrame id
   const mockIntervalId = useRef(null);   // setInterval id for mock mode
   const lastSignRef    = useRef({ sign: null, timestamp: 0 });
-  const detectionHistoryRef = useRef([]);
+  const recentPredictionsRef = useRef([]);
   const predictionHistoryRef = useRef([]);
+  const REQUIRED_CONSECUTIVE = 4;
+  const NO_REQUIRED_CONSECUTIVE = 6;
+  const previousLandmarksRef = useRef(null);
+  const STABILITY_THRESHOLD = 0.02;
   const isProcessingRef = useRef(false);
   const tfRef = useRef(null);
   const memoryCheckIntervalRef = useRef(null);
@@ -82,12 +85,32 @@ export function useSignDetection(localVideoRef, sendMessage, userId, userName, o
   const [currentSign,    setCurrentSign]    = useState(null);
   const [isModelLoaded,  setIsModelLoaded]  = useState(false);
   const [isHandDetected, setIsHandDetected] = useState(false);
+  const [isHandStable, setIsHandStable] = useState(false);
   const [mockMode,       setMockMode]       = useState(false);
   const [currentConfidence, setCurrentConfidence] = useState(0);
   const [predictionHistory, setPredictionHistory] = useState([]);
   const [totalPredictions, setTotalPredictions] = useState(0);
   const [fps, setFps] = useState(0);
   const [landmarks,      setLandmarks]      = useState(null);  // for debug canvas
+
+  const checkHandStability = useCallback((currentLandmarks) => {
+    if (!previousLandmarksRef.current) {
+      previousLandmarksRef.current = currentLandmarks;
+      return false;
+    }
+
+    let totalMovement = 0;
+    for (let i = 0; i < currentLandmarks.length; i++) {
+      totalMovement += Math.abs(
+        currentLandmarks[i] - previousLandmarksRef.current[i]
+      );
+    }
+
+    previousLandmarksRef.current = currentLandmarks;
+    const avgMovement = totalMovement / currentLandmarks.length;
+
+    return avgMovement < STABILITY_THRESHOLD;
+  }, []);
 
   /* ── sendMessage stable wrapper ─────────────────────────────────────── */
   const sendMessageStable = useCallback((type, data) => {
@@ -102,6 +125,11 @@ export function useSignDetection(localVideoRef, sendMessage, userId, userName, o
    * @param {number} confidence  — prediction confidence [0, 1]
    * ──────────────────────────────────────────────────────────────────── */
   const onSignDetected = useCallback((sign, confidence) => {
+    const signLower = String(sign ?? '').trim().toLowerCase();
+    if (IGNORED_SIGNS.some((s) => s.toLowerCase() === signLower)) {
+      return;
+    }
+
     const now = Date.now();
 
     // Debounce: skip if same sign within DEBOUNCE_MS.
@@ -246,6 +274,13 @@ export function useSignDetection(localVideoRef, sendMessage, userId, userName, o
     const tfLocal = tfRef.current;
     if (!modelRef.current || !tfLocal) return;
 
+    const stable = checkHandStability(landmarks63);
+    setIsHandStable((prev) => (prev === stable ? prev : stable));
+    if (!stable) {
+      predictionHistoryRef.current = [];
+      return;
+    }
+
     try {
       const result = tfLocal.tidy(() => {
         const scaledLandmarks = applyScaler(landmarks63);
@@ -265,44 +300,73 @@ export function useSignDetection(localVideoRef, sendMessage, userId, userName, o
 
         const maxIndex = probs.indexOf(Math.max(...probs));
         const confidence = probs[maxIndex];
-        const mappedSign = labelEncoderRef.current?.[maxIndex.toString()];
-        return { sign: mappedSign || SIGN_LABELS[maxIndex], confidence };
+        return { maxIndex, confidence };
       });
 
-      if (result && result.sign) {
+      if (result && Number.isFinite(result.confidence)) {
+        const signName = labelEncoderRef.current?.[
+          result.maxIndex.toString()
+        ] || 'UNKNOWN';
+
         setTotalPredictions((prev) => prev + 1);
 
-        const historyEntry = {
-          sign: result.sign,
-          confidence: result.confidence,
-        };
-
-        predictionHistoryRef.current.push(historyEntry);
-        if (predictionHistoryRef.current.length > 5) {
-          predictionHistoryRef.current.shift();
+        recentPredictionsRef.current.push({ sign: signName, confidence: result.confidence });
+        if (recentPredictionsRef.current.length > 5) {
+          recentPredictionsRef.current.shift();
         }
-        setPredictionHistory([...predictionHistoryRef.current]);
+        setPredictionHistory([...recentPredictionsRef.current]);
 
-        detectionHistoryRef.current.push(historyEntry);
-        if (detectionHistoryRef.current.length > CONFIRMATION_FRAMES) {
-          detectionHistoryRef.current.shift();
-        }
+        if (result.confidence >= CONFIDENCE_THRESHOLD) {
+          const signLower = signName.toLowerCase();
+          if (IGNORED_SIGNS.some((s) => s.toLowerCase() === signLower)) {
+            predictionHistoryRef.current = [];
+            return;
+          }
 
-        const history = detectionHistoryRef.current;
-        if (history.length >= CONFIRMATION_FRAMES) {
-          const allSame = history.every((h) => h.sign === result.sign);
-          const avgConfidence = history.reduce((sum, h) => sum + h.confidence, 0) / history.length;
+          const required = signName === 'NO' ? NO_REQUIRED_CONSECUTIVE : REQUIRED_CONSECUTIVE;
 
-          if (allSame && avgConfidence >= CONFIDENCE_THRESHOLD) {
-            onSignDetected(result.sign, avgConfidence);
-            detectionHistoryRef.current = [];
+          predictionHistoryRef.current.push(signName);
+          if (predictionHistoryRef.current.length > required) {
+            predictionHistoryRef.current.shift();
+          }
+
+          if (typeof window !== 'undefined' && window.signDebug) {
+            console.log('Prediction:', {
+              sign: signName,
+              confidence: (result.confidence * 100).toFixed(1) + '%',
+              threshold: (CONFIDENCE_THRESHOLD * 100) + '%',
+              passes: result.confidence >= CONFIDENCE_THRESHOLD,
+              historyLength: predictionHistoryRef.current.length,
+              history: predictionHistoryRef.current,
+            });
+          }
+
+          const allSame = predictionHistoryRef.current.length >= required &&
+            predictionHistoryRef.current.every((s) => s === signName);
+
+          if (allSame) {
+            onSignDetected(signName, result.confidence);
+            predictionHistoryRef.current = [];
+          }
+        } else {
+          predictionHistoryRef.current = [];
+
+          if (typeof window !== 'undefined' && window.signDebug) {
+            console.log('Prediction:', {
+              sign: signName,
+              confidence: (result.confidence * 100).toFixed(1) + '%',
+              threshold: (CONFIDENCE_THRESHOLD * 100) + '%',
+              passes: result.confidence >= CONFIDENCE_THRESHOLD,
+              historyLength: predictionHistoryRef.current.length,
+              history: predictionHistoryRef.current,
+            });
           }
         }
       }
     } catch (err) {
       console.error('[SignDetect] Prediction error:', err);
     }
-  }, [onSignDetected, applyScaler]);
+  }, [onSignDetected, applyScaler, checkHandStability]);
 
   /* ──────────────────────────────────────────────────────────────────────
    * processHandResults
@@ -321,8 +385,10 @@ export function useSignDetection(localVideoRef, sendMessage, userId, userName, o
       results.multiHandLandmarks.length === 0
     ) {
       setIsHandDetected(false);
+      setIsHandStable(false);
       setLandmarks(null);
-      detectionHistoryRef.current = [];
+      predictionHistoryRef.current = [];
+      previousLandmarksRef.current = null;
       return;
     }
 
@@ -438,11 +504,13 @@ export function useSignDetection(localVideoRef, sendMessage, userId, userName, o
     setCurrentSign(null);
     setCurrentConfidence(0);
     setIsHandDetected(false);
+    setIsHandStable(false);
     setLandmarks(null);
-    detectionHistoryRef.current = [];
+    recentPredictionsRef.current = [];
     predictionHistoryRef.current = [];
     setPredictionHistory([]);
     setFps(0);
+    previousLandmarksRef.current = null;
     frameStatsRef.current = {
       frameCount: 0,
       lastFpsUpdate: performance.now(),
@@ -573,7 +641,6 @@ export function useSignDetection(localVideoRef, sendMessage, userId, userName, o
     stopMockDetection(mockIntervalId.current);
     mockIntervalId.current = null;
     setIsSignModeOn(false);
-    detectionHistoryRef.current = [];
     console.log('[SignDetect] Sign detection stopped');
   }, [stopCapture]);
 
@@ -613,6 +680,7 @@ export function useSignDetection(localVideoRef, sendMessage, userId, userName, o
     currentConfidence,
     isModelLoaded,
     isHandDetected,
+    isHandStable,
     mockMode,
     predictionHistory,
     totalPredictions,

@@ -8,6 +8,26 @@
 let ttsVolume = 1.0;
 let ttsEnabled = true;
 
+let lastSpokenSign = null;
+let lastSpokenTime = 0;
+const SIGN_SPEAK_COOLDOWN = 4000;
+
+const SIGN_PHRASES = (() => {
+  const letters = 'ABCDEFGHIJKLMNOPQRSTUVWXYZ'.split('').reduce((acc, letter) => {
+    acc[letter] = letter;
+    return acc;
+  }, {});
+
+  return {
+    ...letters,
+    HELLO: 'Hello',
+    THANKS: 'Thank you',
+    BYE: 'Goodbye',
+    YES: 'Yes',
+    NO: 'No',
+  };
+})();
+
 /**
  * Returns whether the Web Speech synthesis API is available.
  * @returns {boolean}
@@ -139,3 +159,24 @@ export function speakWithPriority(text, priority = 'normal') {
     console.warn('TTS: speakWithPriority failed:', error);
   }
 }
+
+export const speakSign = (signName) => {
+  const now = Date.now();
+
+  if (
+    signName === lastSpokenSign &&
+    now - lastSpokenTime < SIGN_SPEAK_COOLDOWN
+  ) {
+    console.log('TTS: Skipping repeated sign:', signName);
+    return;
+  }
+
+  const phrase = SIGN_PHRASES[signName];
+  if (!phrase) return;
+
+  lastSpokenSign = signName;
+  lastSpokenTime = now;
+
+  console.log('TTS: Speaking sign:', signName, phrase);
+  return speak(phrase);
+};
