@@ -77,6 +77,7 @@ function SignDetectionOverlay({
   currentSign    = null,
   confidence     = 0,
   isModelLoaded  = false,
+  mockMode = false,
 }) {
   // Track sign display separately so we can hold it for 2 s after it clears.
   const [displaySign, setDisplaySign]   = useState(null);
@@ -105,10 +106,18 @@ function SignDetectionOverlay({
   return (
     <div style={container} aria-live="polite">
 
+      {mockMode && isModelLoaded && (
+        <span style={pill({ background: 'rgba(100,100,100,0.75)', color: '#e5e5e5' })}>
+          <i className="fa-solid fa-flask" aria-hidden="true" />
+          Mock detection
+        </span>
+      )}
+
       {/* ── loading state ── */}
       {!isModelLoaded && (
         <span style={pill({ background: 'rgba(234,179,8,0.85)', color: '#fff' })}>
-          ⏳ Loading AI Model…
+          <i className="fa-solid fa-spinner fa-spin" aria-hidden="true" />
+          Loading AI Model…
         </span>
       )}
 

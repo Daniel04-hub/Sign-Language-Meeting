@@ -62,16 +62,16 @@ function ParticipantSidebar({
             <div className="participant-name" title={displayName}>{displayName}</div>
             <div className="participant-status" aria-label="Participant status indicators">
               <span style={{ color: participant.isMuted ? 'var(--text-secondary)' : 'white' }} title={participant.isMuted ? 'Muted' : 'Mic on'}>
-                🎤
+                <i className={participant.isMuted ? 'fa-solid fa-microphone-slash' : 'fa-solid fa-microphone'} aria-hidden="true" />
               </span>
               <span style={{ color: participant.isCameraOff ? 'var(--text-secondary)' : 'white' }} title={participant.isCameraOff ? 'Camera off' : 'Camera on'}>
-                🎥
+                <i className={participant.isCameraOff ? 'fa-solid fa-video-slash' : 'fa-solid fa-video'} aria-hidden="true" />
               </span>
               <span style={{ color: participant.isSigning ? 'var(--accent-purple)' : 'var(--text-secondary)' }} title={participant.isSigning ? 'Signing' : 'Not signing'}>
-                🤟
+                <i className="fa-solid fa-hands-asl-interpreting" aria-hidden="true" />
               </span>
               <span style={{ color: participant.isSpeaking ? 'var(--accent-blue)' : 'var(--text-secondary)' }} title={participant.isSpeaking ? 'Speaking' : 'Not speaking'}>
-                💬
+                <i className="fa-solid fa-comment-dots" aria-hidden="true" />
               </span>
             </div>
           </div>

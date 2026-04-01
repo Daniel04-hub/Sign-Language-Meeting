@@ -1,178 +1,117 @@
-# Sign Language Meeting
+\# Sign Language Meeting
 
-Real-time video calls with Indian Sign Language AI detection.
-Built for the Deaf community.
+\## 1. Project Title
 
-## What It Does
-- Deaf user signs → Hearing user hears it (Text-to-Speech)
-- Hearing user speaks → Deaf user sees captions (28px overlay)
-- Real-time P2P video via WebRTC (up to 8 users)
-- 5 ISL signs detected: HELLO, THANKS, BYE, YES, NO
+Sign Language Meeting (SignMeet)
 
-## Tech Stack
+\## 2. Description
 
-| Layer     | Technology                                    |
-|-----------|-----------------------------------------------|
-| Backend   | Django 4.2 + Django Channels + PostgreSQL     |
-| Frontend  | React 18 + Vite + Bootstrap 5.3              |
-| AI/ML     | MediaPipe Hands + TensorFlow.js (in browser) |
-| Real-time | WebRTC P2P + Django Channels WebSockets       |
-| Deploy    | Render.com free tier + Docker                 |
+SignMeet is a real-time web meeting application designed to improve accessibility between signing and speaking participants. It combines peer-to-peer video calling with live speech captions and an in-browser sign recognition pipeline.
 
-## Quick Start
+\## 3. Features
 
-Backend:
-	cd backend
-	python -m venv venv
-	venv\Scripts\activate
-	pip install -r requirements.txt
-	cp ../.env.example .env
-	python manage.py migrate
-	python manage.py runserver
+- Create and join meeting rooms via a REST API
+- Peer-to-peer video and audio using WebRTC
+- Real-time signaling and room events over WebSockets (Django Channels)
+- Live speech-to-text captions using the Web Speech API, broadcast to participants
+- In-browser sign recognition: MediaPipe Hands landmarks (63 features) classified by a TensorFlow.js model
+- Optional text-to-speech playback for detected signs (frontend)
 
-Frontend:
-	cd frontend
-	npm install
-	npm run dev
+\## 4. Tech Stack (Backend, Frontend, AI/ML)
 
-Train AI Model (optional):
-	cd train_model
-	pip install -r requirements.txt
-	python train.py
+\### Backend
 
-## How It Works
+- Django 4.2, Django REST Framework
+- Django Channels (WebSockets), Daphne (ASGI)
+- PostgreSQL (default), optional Redis channel layer for production
 
-### Deaf User Signs Flow
-1. Deaf user enables Sign Mode
-2. MediaPipe captures hand from camera at 10fps
-3. 21 landmarks extracted (63 float values)
-4. StandardScaler normalizes the values
-5. TF.js MLP model predicts sign + confidence
-6. If confidence above 85 percent: sign detected
-7. WebSocket sends sign-detected to Django
-8. Django Channels broadcasts to all room members
-9. Hearing users hear TTS: "Hello there"
-10. All users see green badge on deaf user video tile
+\### Frontend
 
-### Hearing User Speaks Flow
-1. Hearing user enables Captions (CC button)
-2. Web Speech API captures microphone audio
-3. Interim text sent via WebSocket as user speaks
-4. Final text sent when user pauses
-5. Django Channels broadcasts to all room members
-6. Deaf user sees large 28px caption overlay
-7. Caption shows: "Alice: Hello, can you hear me?"
-8. Caption auto-clears after 6 seconds
+- React + Vite
+- WebRTC for media transport
+- Web Speech API for captions
 
-## Build Progress
+\### AI/ML
 
-| Phase | Status      | Description                     |
-|-------|-------------|---------------------------------|
-| 1     | Complete    | Django + PostgreSQL + WebSockets|
-| 2     | In Progress | React + WebRTC Video            |
-| 3     | Pending     | Sign Language AI                |
-| 4     | Pending     | Speech Recognition + Captions   |
-| 5     | Pending     | UI Polish + Error Handling      |
-| 6     | Pending     | Docker + Render Deployment      |
+- MediaPipe Hands for landmark extraction
+- TensorFlow.js for in-browser inference
+- Python training utilities (scikit-learn MLP + StandardScaler + LabelEncoder) exporting `model.json`, `weights.bin`, `scaler.json`, and `label_encoder.json`
 
-## API Endpoints
+\## 5. Architecture Overview (brief)
 
-| Method | Endpoint              | Description      |
-|--------|-----------------------|------------------|
-| GET    | /api/health/          | Health check     |
-| POST   | /api/rooms/create/    | Create new room  |
-| POST   | /api/rooms/join/      | Join a room      |
-| GET    | /api/rooms/{code}/    | Get room details |
+- React frontend captures camera frames, extracts hand landmarks using MediaPipe Hands, normalizes features using exported scaler parameters, and runs TF.js inference in the browser.
+- WebRTC provides peer-to-peer media streams; the Django Channels WebSocket handles signaling (offer/answer/ICE) and broadcasts captions and sign-detected events.
+- Django REST API manages room lifecycle (create, join, detail) and provides a health endpoint.
 
-## CI/CD
-Every push to main runs:
-- Django tests and migration checks
-- React build verification
-- AI model dependency validation
+\## 6. Setup Instructions (backend + frontend)
+
+\### Option A: Use the PowerShell startup script (Windows)
+
+From the project root:
+
+```powershell
+pwsh -File ".\signmeet\start.ps1"
+```
+
+If PowerShell 7 is not available:
+
+```powershell
+powershell -ExecutionPolicy Bypass -File ".\signmeet\start.ps1"
+```
+
+\### Option B: Manual setup
+
+\#### Backend
+
+Prerequisites: Python 3.x and a PostgreSQL instance (or set `USE_SQLITE=True`).
+
+```powershell
+cd .\signmeet\backend
+python -m venv ..\..\.venv
+..\..\.venv\Scripts\Activate.ps1
+python -m pip install -r requirements.txt
+python manage.py migrate
+python manage.py runserver 8000
+```
+
+Configuration: create `signmeet\backend\.env` with values such as `SECRET_KEY`, `DEBUG`, and database settings (`DB_NAME`, `DB_USER`, `DB_PASSWORD`, `DB_HOST`, `DB_PORT`).
+
+\#### Frontend
+
+Prerequisites: Node.js (npm).
+
+```powershell
+cd .\signmeet\frontend
 npm install
 npm run dev
 ```
 
-Frontend is available at http://localhost:5173
+\## 7. Usage
 
-### 4 — Test the full stack
+1. Start backend and frontend.
+2. Open `http://localhost:5173`.
+3. Create a room in one tab and join from another tab using the room code.
+4. Allow camera and microphone access.
+5. Enable captions and sign mode from the in-call controls.
 
-1. Open http://localhost:5173
-2. **Tab 1**: Create a meeting as "Alice"
-3. **Tab 2**: Join the same room as "Bob" using the room code
-4. Allow camera + microphone in both tabs
-5. Click **🤟 Sign Mode OFF** to enable sign detection (mock mode fires random signs every 3 s before the real model is trained)
+\## 8. Project Status
 
-## API Endpoints
+Active development. Core room management, WebSocket signaling, and WebRTC calling are implemented. AI sign detection is functional but under ongoing tuning and validation.
 
-| Method | URL | Description |
-|--------|-----|-------------|
-| POST | `/api/rooms/create/` | Create a room |
-| POST | `/api/rooms/join/` | Join a room |
-| GET | `/api/rooms/<room_code>/` | Room detail |
-| GET | `/api/health/` | Health check |
+\## 9. Current Challenges
 
-## WebSocket Events
+- Sign recognition accuracy depends on strict alignment between training-time preprocessing and frontend inference (feature scaling, label mapping, and capture conditions).
+- Model outputs may vary by dataset (phrase model versus alphabet model); maintaining consistent label encodings across versions is critical.
+- WebSocket room registry is in-memory for development and is not suitable for multi-process deployments without moving state to Redis or the database.
+- Cross-browser variability in Web Speech API support and permissions.
 
-Connect: `ws://localhost:8000/ws/room/<ROOM_CODE>/`
+\## 10. Future Improvements
 
-| Direction | Type | Payload |
-|-----------|------|---------|
-| → server | `join` | `{room_code, user_id, user_name}` |
-| ← server | `user-joined` | `{existing_users: [{user_id, user_name}]}` |
-| ← server | `new-user` | `{user_id, user_name}` |
-| → server | `webrtc-offer` | `{target_id, offer}` |
-| → server | `webrtc-answer` | `{target_id, answer}` |
-| → server | `ice-candidate` | `{target_id, candidate}` |
-| → server | `sign-detected` | `{sign, confidence, user_id, user_name}` |
-| → server | `speech-text` | `{text, is_final, user_id, user_name}` |
-| → server | `leave` | `{}` |
+- Expand and validate sign datasets; add model versioning and calibration tooling.
+- Improve robustness of inference gating and UX feedback (confidence, hand presence, stability).
+- Persist room membership state in Redis/database for production scaling.
+- Add authentication and stronger abuse protections for public deployments.
 
-## Training the Sign Model
+\## 11. License (MIT)
 
-Collect landmark data and train the TF.js classifier (see `train_model/README.md`):
-
-```bash
-cd train_model
-python train.py
-# Exports model.json + weights.bin → frontend/public/model/
-```
-
-Until the model is trained, **mock detection** activates automatically (random signs in dev).
-
-## Running Tests
-
-```bash
-# Backend — 8 WebSocket integration tests
-cd backend
-python manage.py test video_call.tests
-
-# Frontend
-cd frontend
-npm run build    # catches TypeScript / JSX compile errors
-```
-
-## CI / CD
-
-GitHub Actions runs on every push and pull request:
-
-- **backend-ci**: Installs deps, applies migrations against a PostgreSQL service container, runs the Django test suite
-- **frontend-ci**: Installs npm deps, runs `npm run build`
-
-See `.github/workflows/` for details.
-
-## Deployment (Render.com)
-
-1. Push to GitHub
-2. Create a **Web Service** on Render for the backend (Python, `daphne signmeet.asgi:application`)
-3. Create a **Static Site** for the frontend (`npm run build`, publish `dist/`)
-4. Add a **PostgreSQL** database + **Redis** instance in Render dashboard
-5. Set environment variables from `.env.example`
-
-## Contributing
-
-PRs welcome — especially additional sign classes, mobile UX improvements, and accessibility fixes.
-
-## License
-
-MIT
+This project is licensed under the MIT License. See LICENSE.

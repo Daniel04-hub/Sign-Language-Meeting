@@ -1,10 +1,11 @@
 import { useState, useRef, useEffect, useCallback } from 'react';
 
-export function useSpeechCaption(sendMessage, userId, userName, isSignModeOn) {
+export function useSpeechCaption(sendMessage, userId, userName, isSignModeOn, onLocalCaption) {
   const recognitionRef = useRef(null);
   const isListeningRef = useRef(false);
   const restartTimerRef = useRef(null);
   const sessionActiveRef = useRef(false);
+  const onLocalCaptionRef = useRef(onLocalCaption);
 
   const [isListening, setIsListening] = useState(false);
   const [isSupported, setIsSupported] = useState(false);
@@ -69,6 +70,11 @@ export function useSpeechCaption(sendMessage, userId, userName, isSignModeOn) {
 
       if (interimTranscript) {
         setInterimText(interimTranscript);
+        onLocalCaptionRef.current?.({
+          text: interimTranscript,
+          fromName: userName,
+          isFinal: false,
+        });
         sendMessage('speech-text', {
           text: interimTranscript,
           is_final: false,
@@ -82,6 +88,11 @@ export function useSpeechCaption(sendMessage, userId, userName, isSignModeOn) {
         const cleanText = finalTranscript.trim();
         setLastFinalText(cleanText);
         setInterimText('');
+        onLocalCaptionRef.current?.({
+          text: cleanText,
+          fromName: userName,
+          isFinal: true,
+        });
         sendMessage('speech-text', {
           text: cleanText,
           is_final: true,
@@ -192,11 +203,12 @@ export function useSpeechCaption(sendMessage, userId, userName, isSignModeOn) {
   }, [checkBrowserSupport]);
 
   useEffect(() => {
-    if (isSignModeOn) {
-      stopListening();
-    }
+    onLocalCaptionRef.current = onLocalCaption;
+  }, [onLocalCaption]);
+
+  useEffect(() => {
     console.log('SpeechCaption: Sign mode changed:', isSignModeOn ? 'ON' : 'OFF');
-  }, [isSignModeOn, stopListening]);
+  }, [isSignModeOn]);
 
   useEffect(() => {
     return () => {

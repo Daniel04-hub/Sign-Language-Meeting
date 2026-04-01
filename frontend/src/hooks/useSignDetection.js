@@ -22,7 +22,24 @@ import { measureLatency, logPerformance } from '../utils/performance';
 /* ── constants ──────────────────────────────────────────────────────────── */
 
 /** Minimum prediction probability accepted as a valid detection. */
-const CONFIDENCE_THRESHOLD = 0.92;
+const CONFIDENCE_THRESHOLD = 0.75;
+
+/** Minimum gap between *any* two emitted sign events (prevents flicker). */
+const MIN_EVENT_GAP_MS = 1200;
+
+/** Require the top class to beat the runner-up by at least this margin. */
+const CONFIDENCE_MARGIN = 0.08;
+
+/** Exponential smoothing for landmark jitter (0..1, higher = less smoothing). */
+const LANDMARK_SMOOTHING_ALPHA = 0.65;
+
+/** Exponential smoothing for class probabilities (0..1, higher = less smoothing). */
+const PROB_SMOOTHING_ALPHA = 0.55;
+
+/** If true, flips Left-hand landmarks to a Right-hand canonical frame. */
+// Training scripts include x-flip augmentation; keep inference consistent by
+// not applying handedness-based canonicalization.
+const CANONICALIZE_LEFT_HAND = false;
 
 /** Minimum milliseconds between two reports of the same sign. */
 const DEBOUNCE_MS = 3000;
@@ -34,6 +51,10 @@ const CAPTURE_FPS = 10;
 
 /** Class labels — must match training-script output order. */
 const SIGN_LABELS = ['HELLO', 'THANKS', 'BYE', 'YES', 'NO'];
+
+/** Smoothing: keep last N predictions, emit majority vote only. */
+const SMOOTHING_WINDOW = 5;
+const SMOOTHING_MAJORITY = 3;
 
 /* ── hook ───────────────────────────────────────────────────────────────── */
 
@@ -62,11 +83,15 @@ export function useSignDetection(localVideoRef, sendMessage, userId, userName, o
   const animFrameRef   = useRef(null);   // requestAnimationFrame id
   const mockIntervalId = useRef(null);   // setInterval id for mock mode
   const lastSignRef    = useRef({ sign: null, timestamp: 0 });
+  const lastEventAtRef = useRef(0);
   const recentPredictionsRef = useRef([]);
   const predictionHistoryRef = useRef([]);
-  const REQUIRED_CONSECUTIVE = 4;
-  const NO_REQUIRED_CONSECUTIVE = 6;
+  // (legacy) predictionHistoryRef previously enforced consecutive frames.
+  // Now we rely on majority-vote smoothing in recentPredictionsRef.
   const previousLandmarksRef = useRef(null);
+  const landmarkEmaRef = useRef(null);
+  const probEmaRef = useRef(null);
+  const stableFrameCountRef = useRef(0);
   const STABILITY_THRESHOLD = 0.02;
   const isProcessingRef = useRef(false);
   const tfRef = useRef(null);
@@ -112,6 +137,61 @@ export function useSignDetection(localVideoRef, sendMessage, userId, userName, o
     return avgMovement < STABILITY_THRESHOLD;
   }, []);
 
+  const smoothLandmarks = useCallback((landmarks63) => {
+    if (!landmarkEmaRef.current || landmarkEmaRef.current.length !== landmarks63.length) {
+      landmarkEmaRef.current = new Float32Array(landmarks63);
+      return landmarkEmaRef.current;
+    }
+
+    const prev = landmarkEmaRef.current;
+    const a = LANDMARK_SMOOTHING_ALPHA;
+    const b = 1 - a;
+    for (let i = 0; i < landmarks63.length; i++) {
+      prev[i] = a * landmarks63[i] + b * prev[i];
+    }
+    return prev;
+  }, []);
+
+  const updateProbabilityEma = useCallback((probs) => {
+    if (!probEmaRef.current || probEmaRef.current.length !== probs.length) {
+      probEmaRef.current = Float32Array.from(probs);
+      return probEmaRef.current;
+    }
+
+    const prev = probEmaRef.current;
+    const a = PROB_SMOOTHING_ALPHA;
+    const b = 1 - a;
+    for (let i = 0; i < probs.length; i++) {
+      prev[i] = a * probs[i] + b * prev[i];
+    }
+    return prev;
+  }, []);
+
+  const getTopTwo = useCallback((probs) => {
+    let maxIndex = -1;
+    let maxVal = -Infinity;
+    let secondVal = -Infinity;
+
+    for (let i = 0; i < probs.length; i++) {
+      const v = probs[i];
+      if (v > maxVal) {
+        secondVal = maxVal;
+        maxVal = v;
+        maxIndex = i;
+      } else if (v > secondVal) {
+        secondVal = v;
+      }
+    }
+
+    return { maxIndex, maxVal, secondVal };
+  }, []);
+
+  const getTopK = useCallback((probs, k = 3) => {
+    const indexed = probs.map((v, i) => ({ i, v }));
+    indexed.sort((a, b) => b.v - a.v);
+    return indexed.slice(0, k);
+  }, []);
+
   /* ── sendMessage stable wrapper ─────────────────────────────────────── */
   const sendMessageStable = useCallback((type, data) => {
     sendRef.current?.(type, data);
@@ -132,6 +212,11 @@ export function useSignDetection(localVideoRef, sendMessage, userId, userName, o
 
     const now = Date.now();
 
+    // Global event gap: prevents rapid sign flicker (e.g., YES/NO oscillation).
+    if (now - lastEventAtRef.current < MIN_EVENT_GAP_MS) {
+      return;
+    }
+
     // Debounce: skip if same sign within DEBOUNCE_MS.
     if (
       lastSignRef.current.sign === sign &&
@@ -141,6 +226,7 @@ export function useSignDetection(localVideoRef, sendMessage, userId, userName, o
     }
 
     lastSignRef.current = { sign, timestamp: now };
+  lastEventAtRef.current = now;
     setCurrentSign(sign);
     setCurrentConfidence(confidence);
 
@@ -274,99 +360,130 @@ export function useSignDetection(localVideoRef, sendMessage, userId, userName, o
     const tfLocal = tfRef.current;
     if (!modelRef.current || !tfLocal) return;
 
-    const stable = checkHandStability(landmarks63);
+    const smoothedLandmarks = smoothLandmarks(landmarks63);
+
+    const stable = checkHandStability(smoothedLandmarks);
     setIsHandStable((prev) => (prev === stable ? prev : stable));
     if (!stable) {
+      stableFrameCountRef.current = 0;
+      probEmaRef.current = null;
       predictionHistoryRef.current = [];
+      recentPredictionsRef.current = [];
+      setPredictionHistory([]);
       return;
     }
 
+    stableFrameCountRef.current += 1;
+
     try {
       const result = tfLocal.tidy(() => {
-        const scaledLandmarks = applyScaler(landmarks63);
+        const scaledLandmarks = applyScaler(smoothedLandmarks);
         inputBufferRef.current.set(scaledLandmarks);
 
-        const inputTensor = tfLocal.tensor2d(inputBufferRef.current, [1, 63]);
-        const prediction = modelRef.current.predict(inputTensor);
-        const predictionTensor = Array.isArray(prediction) ? prediction[0] : prediction;
-        const probs = Array.from(predictionTensor.dataSync());
-
-        if (Array.isArray(prediction)) {
-          prediction.forEach((tensor) => tensor.dispose());
-        } else {
-          predictionTensor.dispose();
+        // Debug: input feature vector shape check
+        if (inputBufferRef.current.length !== 63) {
+          console.warn('[SignDetect] Unexpected input feature length:', inputBufferRef.current.length);
         }
-        inputTensor.dispose();
 
-        const maxIndex = probs.indexOf(Math.max(...probs));
-        const confidence = probs[maxIndex];
-        return { maxIndex, confidence };
+        const inputTensor = tfLocal.tensor2d(inputBufferRef.current, [1, 63]);
+        const predictionTensor = modelRef.current.predict(inputTensor);
+        const logits = Array.isArray(predictionTensor) ? predictionTensor[0] : predictionTensor;
+        const probs = Array.from(logits.dataSync());
+        return { probs };
       });
 
-      if (result && Number.isFinite(result.confidence)) {
+      const probsRaw = result?.probs;
+      if (Array.isArray(probsRaw) && probsRaw.length > 0) {
+        const probsEma = updateProbabilityEma(probsRaw);
+        const { maxIndex, maxVal, secondVal } = getTopTwo(probsEma);
+        const confidence = maxVal;
+        const margin = maxVal - secondVal;
+
         const signName = labelEncoderRef.current?.[
-          result.maxIndex.toString()
+          maxIndex.toString()
         ] || 'UNKNOWN';
 
         setTotalPredictions((prev) => prev + 1);
 
-        recentPredictionsRef.current.push({ sign: signName, confidence: result.confidence });
-        if (recentPredictionsRef.current.length > 5) {
+        const passesStableFrames = stableFrameCountRef.current >= 2;
+        const passesConfidence = confidence >= CONFIDENCE_THRESHOLD;
+        const passesMargin = margin >= CONFIDENCE_MARGIN;
+
+        // Debug logs (always available; use console filtering if noisy)
+        const top3 = getTopK(probsEma, 3).map(({ i, v }) => ({
+          index: i,
+          label: labelEncoderRef.current?.[i.toString()] ?? 'UNKNOWN',
+          prob: Number(v.toFixed(4)),
+        }));
+        console.debug('[SignDetect] Prediction frame', {
+          inputShape: [1, 63],
+          outputLen: probsEma.length,
+          top: { index: maxIndex, label: signName, prob: Number(confidence.toFixed(4)) },
+          secondProb: Number(secondVal.toFixed(4)),
+          margin: Number(margin.toFixed(4)),
+          passes: { stable: passesStableFrames, confidence: passesConfidence, margin: passesMargin },
+          top3,
+        });
+
+        // Only accumulate frames that pass all checks.
+        if (!passesStableFrames || !passesConfidence || !passesMargin || signName === 'UNKNOWN') {
+          recentPredictionsRef.current = [];
+          setPredictionHistory([]);
+          return;
+        }
+
+        const signLower = signName.toLowerCase();
+        if (IGNORED_SIGNS.some((s) => s.toLowerCase() === signLower)) {
+          recentPredictionsRef.current = [];
+          setPredictionHistory([]);
+          return;
+        }
+
+        recentPredictionsRef.current.push({ sign: signName, confidence });
+        if (recentPredictionsRef.current.length > SMOOTHING_WINDOW) {
           recentPredictionsRef.current.shift();
         }
         setPredictionHistory([...recentPredictionsRef.current]);
 
-        if (result.confidence >= CONFIDENCE_THRESHOLD) {
-          const signLower = signName.toLowerCase();
-          if (IGNORED_SIGNS.some((s) => s.toLowerCase() === signLower)) {
-            predictionHistoryRef.current = [];
-            return;
+        // Majority vote over last N frames.
+        const window = recentPredictionsRef.current;
+        if (window.length < SMOOTHING_WINDOW) {
+          return;
+        }
+
+        const counts = new Map();
+        for (const item of window) {
+          if (!item?.sign) continue;
+          counts.set(item.sign, (counts.get(item.sign) ?? 0) + 1);
+        }
+        let majoritySign = null;
+        let majorityCount = 0;
+        for (const [sign, count] of counts.entries()) {
+          if (count > majorityCount) {
+            majorityCount = count;
+            majoritySign = sign;
           }
+        }
 
-          const required = signName === 'NO' ? NO_REQUIRED_CONSECUTIVE : REQUIRED_CONSECUTIVE;
+        if (majoritySign && majorityCount >= SMOOTHING_MAJORITY) {
+          const votes = window.filter((p) => p.sign === majoritySign);
+          const avgConfidence = votes.reduce((sum, p) => sum + (p.confidence ?? 0), 0) / votes.length;
 
-          predictionHistoryRef.current.push(signName);
-          if (predictionHistoryRef.current.length > required) {
-            predictionHistoryRef.current.shift();
-          }
+          console.debug('[SignDetect] Smoothed decision', {
+            window: window.map((p) => p.sign),
+            majoritySign,
+            majorityCount,
+            avgConfidence: Number(avgConfidence.toFixed(4)),
+          });
 
-          if (typeof window !== 'undefined' && window.signDebug) {
-            console.log('Prediction:', {
-              sign: signName,
-              confidence: (result.confidence * 100).toFixed(1) + '%',
-              threshold: (CONFIDENCE_THRESHOLD * 100) + '%',
-              passes: result.confidence >= CONFIDENCE_THRESHOLD,
-              historyLength: predictionHistoryRef.current.length,
-              history: predictionHistoryRef.current,
-            });
-          }
-
-          const allSame = predictionHistoryRef.current.length >= required &&
-            predictionHistoryRef.current.every((s) => s === signName);
-
-          if (allSame) {
-            onSignDetected(signName, result.confidence);
-            predictionHistoryRef.current = [];
-          }
-        } else {
-          predictionHistoryRef.current = [];
-
-          if (typeof window !== 'undefined' && window.signDebug) {
-            console.log('Prediction:', {
-              sign: signName,
-              confidence: (result.confidence * 100).toFixed(1) + '%',
-              threshold: (CONFIDENCE_THRESHOLD * 100) + '%',
-              passes: result.confidence >= CONFIDENCE_THRESHOLD,
-              historyLength: predictionHistoryRef.current.length,
-              history: predictionHistoryRef.current,
-            });
-          }
+          onSignDetected(majoritySign, avgConfidence);
+          recentPredictionsRef.current = [];
         }
       }
     } catch (err) {
       console.error('[SignDetect] Prediction error:', err);
     }
-  }, [onSignDetected, applyScaler, checkHandStability]);
+  }, [onSignDetected, applyScaler, checkHandStability, smoothLandmarks, updateProbabilityEma, getTopTwo, getTopK]);
 
   /* ──────────────────────────────────────────────────────────────────────
    * processHandResults
@@ -387,8 +504,13 @@ export function useSignDetection(localVideoRef, sendMessage, userId, userName, o
       setIsHandDetected(false);
       setIsHandStable(false);
       setLandmarks(null);
+      recentPredictionsRef.current = [];
+      setPredictionHistory([]);
       predictionHistoryRef.current = [];
       previousLandmarksRef.current = null;
+      landmarkEmaRef.current = null;
+      probEmaRef.current = null;
+      stableFrameCountRef.current = 0;
       return;
     }
 
@@ -397,6 +519,14 @@ export function useSignDetection(localVideoRef, sendMessage, userId, userName, o
     setLandmarks(rawLandmarks);  // forward to debug canvas
 
     const landmarks63 = extractLandmarks(rawLandmarks);
+    if (CANONICALIZE_LEFT_HAND) {
+      const handLabel = results.multiHandedness?.[0]?.label;
+      if (handLabel === 'Left') {
+        for (let i = 0; i < 21; i++) {
+          landmarks63[i * 3] = -landmarks63[i * 3];
+        }
+      }
+    }
     predictSign(landmarks63);
     } finally {
       isProcessingRef.current = false;
@@ -421,6 +551,18 @@ export function useSignDetection(localVideoRef, sendMessage, userId, userName, o
       await loadScaler();
       await loadLabelEncoder();
 
+      // Debug: model I/O shape checks + label mapping sanity.
+      const inputShape = model?.inputs?.[0]?.shape;
+      const outputShape = model?.outputs?.[0]?.shape;
+      const labelCount = labelEncoderRef.current ? Object.keys(labelEncoderRef.current).length : 0;
+      console.log('[SignDetect] Model loaded', { inputShape, outputShape, labelCount });
+      if (Array.isArray(outputShape) && typeof outputShape[1] === 'number' && labelCount > 0 && outputShape[1] !== labelCount) {
+        console.warn('[SignDetect] Model output classes != label mapping count', {
+          modelOutputClasses: outputShape[1],
+          labelCount,
+        });
+      }
+
       // Warm-up pass — avoids first-inference latency spike in the call.
       tfLocal.tidy(() => {
         const dummy = tfLocal.zeros([1, 63]);
@@ -441,6 +583,7 @@ export function useSignDetection(localVideoRef, sendMessage, userId, userName, o
         '[SignDetect] Model not found, using mock detection for development:',
         err.message,
       );
+      console.warn('[SignDetect] MOCK MODE enabled (random demo predictions).');
       setMockMode(true);
       setIsModelLoaded(true);  // treat mock as "ready"
     }
@@ -511,6 +654,9 @@ export function useSignDetection(localVideoRef, sendMessage, userId, userName, o
     setPredictionHistory([]);
     setFps(0);
     previousLandmarksRef.current = null;
+    landmarkEmaRef.current = null;
+    probEmaRef.current = null;
+    stableFrameCountRef.current = 0;
     frameStatsRef.current = {
       frameCount: 0,
       lastFpsUpdate: performance.now(),
@@ -530,8 +676,10 @@ export function useSignDetection(localVideoRef, sendMessage, userId, userName, o
     // Create the hidden canvas once.
     if (!canvasRef.current) {
       const canvas  = document.createElement('canvas');
-      canvas.width  = 320;
-      canvas.height = 240;
+      // Training scripts resize images to 224x224 before extracting landmarks.
+      // Keep frontend input consistent to avoid aspect-ratio distortion.
+      canvas.width  = 224;
+      canvas.height = 224;
       canvas.style.display = 'none';
       document.body.appendChild(canvas);
       canvasRef.current = canvas;

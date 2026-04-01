@@ -31,7 +31,8 @@ function SignBadge({ sign }) {
 
   return (
     <div className="sign-badge">
-      🤟 {currentSign}
+      <i className="fa-solid fa-hands-asl-interpreting" aria-hidden="true" style={{ marginRight: 6 }} />
+      {currentSign}
     </div>
   );
 }

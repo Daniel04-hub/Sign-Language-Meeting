@@ -63,7 +63,18 @@ class SignMeetConsumer(AsyncWebsocketConsumer):
     # ── Class-level in-process room registry ─────────────────────────────────
     # { room_code: { user_id: { "name": str, "channel_name": str } } }
     rooms: dict = {}
-    VALID_SIGNS = {'HELLO', 'THANKS', 'BYE', 'YES', 'NO'}
+
+    # The project has shipped multiple trained models over time:
+    # - phrase model: HELLO/THANKS/BYE/YES/NO
+    # - alphabet model: A–Z (+ del/space; typically filtered client-side)
+    # Keep validation permissive enough to support both without breaking TTS.
+    VALID_SIGNS = {
+        'HELLO', 'THANKS', 'BYE', 'YES', 'NO',
+        *list('ABCDEFGHIJKLMNOPQRSTUVWXYZ'),
+        'NOTHING',
+        'DEL',
+        'SPACE',
+    }
 
     # ─────────────────────────────────────────────────────────────────────────
     # Lifecycle

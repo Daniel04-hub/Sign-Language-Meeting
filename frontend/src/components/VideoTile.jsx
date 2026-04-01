@@ -166,7 +166,11 @@ function VideoTile({
         <span style={{ whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis', maxWidth: 180, display: 'inline-block', verticalAlign: 'middle' }}>
           {truncatedName}{isLocal ? ' (You)' : ''}
         </span>
-        {isMuted && <span style={{ marginLeft: 6, opacity: 0.85, fontSize: 11 }}>🔇</span>}
+        {isMuted && (
+          <span style={{ marginLeft: 6, opacity: 0.85, fontSize: 11 }} title="Muted" aria-label="Muted">
+            <i className="fa-solid fa-microphone-slash" aria-hidden="true" />
+          </span>
+        )}
       </div>
 
     </div>

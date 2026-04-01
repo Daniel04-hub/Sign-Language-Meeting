@@ -13,7 +13,7 @@
 
 import { useState, useEffect, useRef } from 'react';
 
-function CaptionOverlay({ caption, onClear }) {
+function CaptionOverlay({ caption, onClear, bottom = 90, variant = 'speech' }) {
   const [isVisible, setIsVisible] = useState(false);
   const timerRef = useRef(null);
 
@@ -55,7 +55,8 @@ function CaptionOverlay({ caption, onClear }) {
 
   return (
     <div
-      className={`caption-overlay${caption.isFinal ? '' : ' interim'}`}
+      className={`caption-overlay${caption.isFinal ? '' : ' interim'}${variant === 'sign' ? ' sign' : ''}`}
+      style={{ bottom }}
       role="status"
       aria-live="polite"
       aria-atomic="true"

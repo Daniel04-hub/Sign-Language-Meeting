@@ -73,6 +73,7 @@ function RoomPage() {
 
   // ── local UI state ────────────────────────────────────────────────────
   const [caption, setCaption] = useState(null);   // {text, fromName, isFinal}
+  const [signCaption, setSignCaption] = useState(null); // {text, fromName, isFinal}
   const [signDetections, setSignDetections] = useState({});     // {userId: signText}
   const [showPermissionModal, setShowPermissionModal] = useState(false);
   const [permissionType, setPermissionType] = useState('microphone');
@@ -164,6 +165,12 @@ function RoomPage() {
           [data.from_id]: receivedSign,
         }));
 
+        setSignCaption({
+          text: receivedSign,
+          fromName: data.from_name ?? 'Unknown',
+          isFinal: true,
+        });
+
         if (data.from_id !== userId) {
           const now = Date.now();
           const lastTime = lastSignTimeRef.current[data.from_id] || 0;
@@ -185,19 +192,21 @@ function RoomPage() {
             return updated;
           });
         }, 2500);
+
+        setTimeout(() => {
+          setSignCaption(null);
+        }, 2500);
         break;
       }
 
       // Speech-to-text caption (server echoes from sender).
       case 'speech-text': {
-        const senderId = message.user_id ?? message.from_id;
-        if (senderId !== userId) {
-          setCaption({
-            text: message.text,
-            fromName: message.from_name ?? 'Unknown',
-            isFinal: message.is_final ?? true,
-          });
-        }
+        // Server broadcasts speech-text to everyone except sender.
+        setCaption({
+          text: message.text,
+          fromName: message.from_name ?? 'Unknown',
+          isFinal: message.is_final ?? true,
+        });
         break;
       }
 
@@ -271,6 +280,10 @@ function RoomPage() {
     userId,
     userName,
     isSignModeOn,
+    (localCaption) => {
+      // Show local captions immediately (server does not echo to sender).
+      setCaption(localCaption);
+    },
   );
 
   useEffect(() => {
@@ -367,10 +380,8 @@ function RoomPage() {
       stopSignDetection();
       return;
     }
-
-    stopListening();
     startSignDetection();
-  }, [isSignModeOn, startSignDetection, stopSignDetection, stopListening]);
+  }, [isSignModeOn, startSignDetection, stopSignDetection]);
 
   const handleToggleSpeech = useCallback(() => {
     if (isListening) {
@@ -378,13 +389,8 @@ function RoomPage() {
       return;
     }
 
-    if (isSignModeOn) {
-      showToast('Turn off Sign Mode first', 'warning');
-      return;
-    }
-
     startListening();
-  }, [isListening, isSignModeOn, startListening, stopListening, showToast]);
+  }, [isListening, startListening, stopListening]);
 
   /**
    * Copies room code to clipboard and shows feedback.
@@ -601,6 +607,7 @@ function RoomPage() {
         currentSign={currentSign}
         confidence={currentConfidence}
         isModelLoaded={isModelLoaded}
+        mockMode={mockMode}
       />
 
       {showDebug && (
@@ -626,6 +633,13 @@ function RoomPage() {
       <CaptionOverlay
         caption={caption}
         onClear={() => setCaption(null)}
+      />
+
+      <CaptionOverlay
+        caption={signCaption}
+        onClear={() => setSignCaption(null)}
+        bottom={150}
+        variant="sign"
       />
 
       <SpeechModeIndicator
